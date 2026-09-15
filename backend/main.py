@@ -23,6 +23,7 @@ import asyncio
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, RedirectResponse
 
 from data import CAMERAS_DATA
 from database import get_conn, init_db
@@ -2824,4 +2825,42 @@ def _relative_time(created_at: str) -> str:
         return f"-{int(diff // 3600)}h ago"
     except Exception:
         return "Recently"
+
+
+# ─── Production Frontend SPA Serving ──────────────────────────────────────────
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "dist"
+if not FRONTEND_DIST.exists():
+    FRONTEND_DIST = Path("dist").resolve()
+
+if FRONTEND_DIST.exists() and (FRONTEND_DIST / "index.html").exists():
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend_assets")
+
+    @app.get("/")
+    async def serve_root():
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+    @app.get("/favicon.ico")
+    async def serve_favicon():
+        fav = FRONTEND_DIST / "favicon.ico"
+        if fav.exists():
+            return FileResponse(fav)
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # Do not catch API or documentation routes
+        if full_path.startswith(("api", "docs", "redoc", "openapi.json", "evidence", "uploads")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        target = FRONTEND_DIST / full_path
+        if target.is_file():
+            return FileResponse(target)
+        return FileResponse(FRONTEND_DIST / "index.html")
+else:
+    @app.get("/")
+    def serve_fallback_root():
+        return RedirectResponse(url="/docs")
+
 

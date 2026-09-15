@@ -306,14 +306,15 @@ const CameraFeedCell: React.FC<{
 
         if (payload) {
           try {
-            let res = await fetch('http://localhost:8000/api/detect/frame', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-
-            if (!res.ok) {
+            let res: Response;
+            try {
               res = await fetch('/api/detect/frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
+            } catch {
+              res = await fetch('http://localhost:8000/api/detect/frame', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
