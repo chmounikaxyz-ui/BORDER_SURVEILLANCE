@@ -2829,11 +2829,20 @@ def _relative_time(created_at: str) -> str:
 
 # ─── Production Frontend SPA Serving ──────────────────────────────────────────
 
-FRONTEND_DIST = Path(__file__).resolve().parent.parent / "dist"
-if not FRONTEND_DIST.exists():
-    FRONTEND_DIST = Path("dist").resolve()
+FRONTEND_DIST = None
+for candidate in [
+    Path(__file__).resolve().parent / "dist",
+    Path(__file__).resolve().parent.parent / "dist",
+    Path("dist").resolve(),
+    Path("backend/dist").resolve(),
+    Path("/opt/render/project/src/dist"),
+    Path("/opt/render/project/src/backend/dist"),
+]:
+    if candidate.exists() and (candidate / "index.html").exists():
+        FRONTEND_DIST = candidate
+        break
 
-if FRONTEND_DIST.exists() and (FRONTEND_DIST / "index.html").exists():
+if FRONTEND_DIST:
     assets_dir = FRONTEND_DIST / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend_assets")
