@@ -1,9 +1,12 @@
 """
 BorderVision AI — FastAPI Backend
 Run with:  uvicorn main:app --reload --port 8000
-"""  # v1.0.1 — cleared default watchlist vehicles
+"""
+import sys
 import json
 import os
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import re
 import time
 import uuid
