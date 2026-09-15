@@ -1,0 +1,6 @@
+{
+  "name": "BorderVision AI - Command Centre",
+  "description": "Tactical border intelligence and real-time surveillance operations platform with AI-assisted threat detection, edge node telemetry, watchlist biometric review, and cryptographically verified evidence vault.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
