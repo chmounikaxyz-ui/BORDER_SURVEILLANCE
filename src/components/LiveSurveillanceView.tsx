@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { CameraNode, TacticalAlert } from '../types';
+import { getApiBaseUrl } from '../api/client';
 
 interface LiveSurveillanceViewProps {
   cameras: CameraNode[];
@@ -247,7 +248,7 @@ const CameraFeedCell: React.FC<{
           camera_code: cam?.code || 'CAM-LIVE'
         };
 
-        await fetch('/api/detect/frame', {
+        await fetch(`${getApiBaseUrl()}/detect/frame`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -308,13 +309,13 @@ const CameraFeedCell: React.FC<{
           try {
             let res: Response;
             try {
-              res = await fetch('/api/detect/frame', {
+              res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
               });
             } catch {
-              res = await fetch('http://localhost:8000/api/detect/frame', {
+              res = await fetch('/api/detect/frame', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -344,7 +345,7 @@ const CameraFeedCell: React.FC<{
             }
           } catch (err) {
             try {
-              const res = await fetch('/api/detect/frame', {
+              const res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)

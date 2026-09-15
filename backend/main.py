@@ -40,9 +40,29 @@ EVIDENCE_FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 EVIDENCE_VIDEOS_DIR = Path(__file__).parent.parent / "data" / "evidence" / "videos"
 EVIDENCE_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
-# ─── Uploads directory ───────────────────────────────────────────────────────
+# ─── Uploads and Samples directory ───────────────────────────────────────────
 UPLOADS_DIR = Path(__file__).parent.parent / "data" / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+
+def ensure_sample_videos():
+    """Ensure at least one sample surveillance video exists in UPLOADS_DIR."""
+    try:
+        existing_mp4s = list(UPLOADS_DIR.glob("*.mp4"))
+        if not existing_mp4s:
+            sample_candidates = list(SAMPLES_DIR.glob("*.mp4"))
+            if sample_candidates:
+                import shutil
+                for sc in sample_candidates:
+                    dest = UPLOADS_DIR / sc.name
+                    if not dest.exists():
+                        shutil.copy(sc, dest)
+                print(f"[BorderVision] Seeded {len(sample_candidates)} sample videos into {UPLOADS_DIR}")
+    except Exception as e:
+        print(f"[BorderVision] Warning during sample video seeding: {e}")
+
 
 # ─── Watchlist Memory Cache & Feature Store ─────────────────────────────────────
 _WATCHLIST_PERSONS_CACHE = None
@@ -128,6 +148,7 @@ async def lifespan(app: FastAPI):
     from tamper import start_monitor, stop_monitor
     camera_codes = [cam["code"] for cam in CAMERAS_DATA]
     start_monitor(camera_codes)
+    ensure_sample_videos()
     print("[BorderVision API] Ready at http://localhost:8000")
     try:
         yield
@@ -213,9 +234,15 @@ def process_video(req: VideoJobRequest, background_tasks: BackgroundTasks):
 def process_sample_video(background_tasks: BackgroundTasks):
     """Run AI detection on existing uploaded surveillance video sample."""
     global _current_job_id
+    ensure_sample_videos()
     mp4s = list(UPLOADS_DIR.glob("*.mp4"))
     if not mp4s:
-        raise HTTPException(status_code=404, detail="No sample video found in uploads directory")
+        mp4s = list(SAMPLES_DIR.glob("*.mp4"))
+    if not mp4s:
+        raise HTTPException(
+            status_code=404,
+            detail="No sample video found on server. Please upload an MP4 video or check backend/samples."
+        )
     # Prefer the 4k highway video if available
     sample = next((p for p in mp4s if "14266560" in p.name), mp4s[0])
     sample_path = str(sample)
@@ -2871,5 +2898,12 @@ else:
     @app.get("/")
     def serve_fallback_root():
         return RedirectResponse(url="/docs")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
 

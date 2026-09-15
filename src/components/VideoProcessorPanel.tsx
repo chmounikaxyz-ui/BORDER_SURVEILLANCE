@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { processVideo, getVideoStatus, uploadVideo, processSampleVideo, VideoJob, UploadProgress } from '../api/client';
+import { processVideo, getVideoStatus, uploadVideo, processSampleVideo, VideoJob, UploadProgress, getApiBaseUrl } from '../api/client';
 
 interface VideoProcessorPanelProps {
   onAlertsGenerated?: (count: number) => void;
@@ -91,7 +91,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
         create_alert: false, // Never create duplicate DB alerts from video frame probes
       };
 
-      const res = await fetch('/api/detect/frame', {
+      const res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -255,8 +255,8 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     const result = await processVideo(videoPath.trim());
     setIsStarting(false);
 
-    if (!result) {
-      setError('Backend unreachable. Start the Python backend first.');
+    if (!result || result.error || !result.job_id) {
+      setError(result?.error || 'Backend unreachable. Start the Python backend first.');
       return;
     }
 
@@ -277,13 +277,18 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     const result = await processSampleVideo();
     setIsStarting(false);
 
-    if (!result) {
-      setError('Could not start sample video detection. Backend unreachable.');
+    if (!result || result.error || !result.job_id) {
+      setError(
+        result?.error ||
+        'Could not start sample video detection. If using Render free tier, the instance may be starting up (cold start); please try again in a few seconds.'
+      );
       return;
     }
 
     if (result.filename) {
-      setVideoPreviewUrl(`/uploads/${result.filename}`);
+      const apiBase = getApiBaseUrl();
+      const origin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : '';
+      setVideoPreviewUrl(`${origin}/uploads/${result.filename}`);
     }
 
     setJob({

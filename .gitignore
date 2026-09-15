@@ -20,6 +20,9 @@ backend/evidence/
 backend/uploads/
 uploads/
 scratch/
+!backend/samples/
+!backend/samples/**
+
 
 # Python cache & virtual environments
 __pycache__/

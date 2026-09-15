@@ -7,6 +7,36 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:8000';
+
+// Proxy API, evidence, and uploads to FastAPI backend if available
+app.use(['/api', '/evidence', '/uploads'], async (req, res) => {
+  try {
+    const targetUrl = `${BACKEND_URL}${req.originalUrl}`;
+    const headers = { ...req.headers };
+    delete headers.host;
+
+    const options = {
+      method: req.method,
+      headers,
+    };
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      options.body = req;
+      options.duplex = 'half';
+    }
+
+    const proxyRes = await fetch(targetUrl, options);
+    res.status(proxyRes.status);
+    proxyRes.headers.forEach((value, key) => {
+      res.setHeader(key, value);
+    });
+    const buffer = await proxyRes.arrayBuffer();
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    res.status(502).json({ error: 'Proxy error connecting to backend', details: err.message });
+  }
+});
 
 // Serve built static frontend files
 app.use(express.static(path.join(__dirname, 'dist')));

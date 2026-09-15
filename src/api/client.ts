@@ -15,55 +15,73 @@ import {
 
 export type { ReidTrajectory };
 
+export function getApiBaseUrl(): string {
+  const envUrl = (import.meta.env.VITE_API_URL as string)?.trim();
+  if (envUrl) return envUrl.replace(/\/$/, '');
+
+  const winUrl = (typeof window !== 'undefined' && (window as any).__API_URL__)?.trim();
+  if (winUrl) return winUrl.replace(/\/$/, '');
+
+  try {
+    const stored = localStorage.getItem('bordervision_api_url')?.trim();
+    if (stored) return stored.replace(/\/$/, '');
+  } catch {}
+
+  return '/api';
+}
+
 const BASE = '/api';
 const ALT_BASE = 'http://localhost:8000/api';
+
+export interface ApiFetchOptions extends RequestInit {
+  timeoutMs?: number;
+}
 
 // ─── Generic fetch wrapper ────────────────────────────────────────────────────
 
 async function apiFetch<T>(
   path: string,
-  options?: RequestInit,
+  options?: ApiFetchOptions,
 ): Promise<T | null> {
+  const timeoutMs = options?.timeoutMs ?? 15000;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4000);
-  try {
-    const res = await fetch(`${BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      ...options,
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) {
-      console.warn(`[API] ${path} → ${res.status}`);
-      return null;
-    }
-    if (res.status === 204 || res.headers.get('content-length') === '0') {
-      return ({} as T);
-    }
-    const text = await res.text();
-    return text ? (JSON.parse(text) as T) : ({} as T);
-  } catch (err) {
-    clearTimeout(timeoutId);
-    // Vite proxy failed or aborted — try direct connection to backend port 8000
-    try {
-      const altController = new AbortController();
-      const altTimeout = setTimeout(() => altController.abort(), 4000);
-      const altRes = await fetch(`${ALT_BASE}${path}`, {
-        headers: { 'Content-Type': 'application/json' },
-        signal: altController.signal,
-        ...options,
-      });
-      clearTimeout(altTimeout);
-      if (altRes.ok) {
-        if (altRes.status === 204 || altRes.headers.get('content-length') === '0') {
-          return ({} as T);
-        }
-        const altText = await altRes.text();
-        return altText ? (JSON.parse(altText) as T) : ({} as T);
-      }
-    } catch {}
-    return null;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  const base = getApiBaseUrl();
+  const candidateBases = [base];
+  if (base !== '/api' && !candidateBases.includes('/api')) {
+    candidateBases.push('/api');
   }
+  if (!candidateBases.includes('http://localhost:8000/api')) {
+    candidateBases.push('http://localhost:8000/api');
+  }
+
+  const { timeoutMs: _t, ...fetchOptions } = options || {};
+
+  for (const b of candidateBases) {
+    try {
+      const res = await fetch(`${b}${path}`, {
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        ...fetchOptions,
+      });
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        console.warn(`[API] ${b}${path} → ${res.status}`);
+        continue;
+      }
+      if (res.status === 204 || res.headers.get('content-length') === '0') {
+        return ({} as T);
+      }
+      const text = await res.text();
+      return text ? (JSON.parse(text) as T) : ({} as T);
+    } catch {
+      // try next candidate base
+    }
+  }
+
+  clearTimeout(timeoutId);
+  return null;
 }
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -246,17 +264,84 @@ export interface VideoJob {
   alert_summary?: string;
 }
 
-export async function processVideo(videoPath: string): Promise<{ job_id: string } | null> {
-  return apiFetch<{ job_id: string }>('/video/process', {
-    method: 'POST',
-    body: JSON.stringify({ video_path: videoPath }),
-  });
+export async function processVideo(videoPath: string): Promise<{ job_id?: string; error?: string } | null> {
+  const base = getApiBaseUrl();
+  const candidateBases = [base];
+  if (base !== '/api' && !candidateBases.includes('/api')) candidateBases.push('/api');
+  if (!candidateBases.includes('http://localhost:8000/api')) candidateBases.push('http://localhost:8000/api');
+
+  let lastError = '';
+  for (const b of candidateBases) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    try {
+      const res = await fetch(`${b}/video/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_path: videoPath }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        return await res.json();
+      } else {
+        const txt = await res.text();
+        try {
+          const parsed = JSON.parse(txt);
+          lastError = parsed.detail || parsed.message || txt;
+        } catch {
+          lastError = txt;
+        }
+      }
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      lastError = err?.name === 'AbortError'
+        ? 'Request timed out waiting for video processing.'
+        : (err?.message || 'Connection failed.');
+    }
+  }
+  return { error: lastError || 'Backend unreachable.' };
 }
 
-export async function processSampleVideo(): Promise<{ job_id: string; status: string; filename?: string } | null> {
-  return apiFetch<{ job_id: string; status: string; filename?: string }>('/video/sample', {
-    method: 'POST',
-  });
+export async function processSampleVideo(): Promise<{ job_id?: string; status?: string; filename?: string; error?: string } | null> {
+  const base = getApiBaseUrl();
+  const candidateBases = [base];
+  if (base !== '/api' && !candidateBases.includes('/api')) candidateBases.push('/api');
+  if (!candidateBases.includes('http://localhost:8000/api')) candidateBases.push('http://localhost:8000/api');
+
+  let lastError = '';
+  for (const b of candidateBases) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s for Render cold start
+    try {
+      const res = await fetch(`${b}/video/sample`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        return await res.json();
+      } else {
+        const txt = await res.text();
+        try {
+          const parsed = JSON.parse(txt);
+          lastError = parsed.detail || parsed.message || txt;
+        } catch {
+          lastError = txt;
+        }
+      }
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err?.name === 'AbortError') {
+        lastError = 'Request timed out. If using Render free tier, the backend server may still be waking up (cold start); please try again in a few seconds.';
+      } else {
+        lastError = err?.message || 'Network connection failed.';
+      }
+    }
+  }
+
+  return { error: lastError || 'Backend unreachable. If on Render, the service may be starting up; please try again shortly.' };
 }
 
 export async function getVideoStatus(): Promise<VideoJob | null> {
@@ -276,8 +361,12 @@ export async function uploadVideo(
   const formData = new FormData();
   formData.append('file', file);
 
-  // List of URLs to try — proxy first, then direct backend
-  const urls = ['/api/video/upload', 'http://localhost:8000/api/video/upload'];
+  const base = getApiBaseUrl();
+  const urls = [
+    `${base}/video/upload`,
+    '/api/video/upload',
+    'http://localhost:8000/api/video/upload',
+  ].filter((u, i, arr) => arr.indexOf(u) === i);
 
   for (const url of urls) {
     try {
