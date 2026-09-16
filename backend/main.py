@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 
 import asyncio
-from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
@@ -149,7 +149,8 @@ async def lifespan(app: FastAPI):
     camera_codes = [cam["code"] for cam in CAMERAS_DATA]
     start_monitor(camera_codes)
     ensure_sample_videos()
-    print("[BorderVision API] Ready at http://localhost:8000")
+    api_port = os.environ.get("PORT", "8000")
+    print(f"[BorderVision API] Ready on port {api_port}")
     try:
         yield
     finally:
@@ -174,6 +175,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Intercept HEAD requests globally (Render health checks & port scanner probe with HEAD /)
+@app.middleware("http")
+async def handle_head_requests(request: Request, call_next):
+    if request.method == "HEAD":
+        scope = dict(request.scope)
+        scope["method"] = "GET"
+        get_request = Request(scope, request.receive)
+        response = await call_next(get_request)
+        return Response(
+            content=b"",
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            media_type=response.media_type,
+        )
+    return await call_next(request)
+
 # Serve evidence frames & videos as static files
 app.mount(
     "/evidence/frames",
@@ -197,7 +214,8 @@ _current_job_id: Optional[str] = None
 
 # ─── Health ──────────────────────────────────────────────────────────────────
 
-@app.get("/api/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health():
     return {
         "status": "online",
@@ -2856,48 +2874,68 @@ def _relative_time(created_at: str) -> str:
 
 # ─── Production Frontend SPA Serving ──────────────────────────────────────────
 
-FRONTEND_DIST = None
-for candidate in [
-    Path(__file__).resolve().parent / "dist",
-    Path(__file__).resolve().parent.parent / "dist",
-    Path("dist").resolve(),
-    Path("backend/dist").resolve(),
-    Path("/opt/render/project/src/dist"),
-    Path("/opt/render/project/src/backend/dist"),
-]:
-    if candidate.exists() and (candidate / "index.html").exists():
-        FRONTEND_DIST = candidate
-        break
+def _find_frontend_dist():
+    for candidate in [
+        Path(__file__).resolve().parent / "dist",
+        Path(__file__).resolve().parent.parent / "dist",
+        Path("dist").resolve(),
+        Path("backend/dist").resolve(),
+        Path("/opt/render/project/src/dist"),
+        Path("/opt/render/project/src/backend/dist"),
+    ]:
+        if candidate.exists() and (candidate / "index.html").exists():
+            return candidate
+    return None
+
+FRONTEND_DIST = _find_frontend_dist()
 
 if FRONTEND_DIST:
     assets_dir = FRONTEND_DIST / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend_assets")
 
-    @app.get("/")
-    async def serve_root():
-        return FileResponse(FRONTEND_DIST / "index.html")
+@app.api_route("/", methods=["GET", "HEAD"])
+async def serve_root(request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type="text/html")
+    dist = _find_frontend_dist()
+    if dist and (dist / "index.html").exists():
+        return FileResponse(dist / "index.html")
+    return {
+        "name": "BorderVision AI Backend",
+        "status": "online",
+        "docs": "/docs",
+        "health": "/api/health"
+    }
 
-    @app.get("/favicon.ico")
-    async def serve_favicon():
-        fav = FRONTEND_DIST / "favicon.ico"
+@app.api_route("/favicon.ico", methods=["GET", "HEAD"])
+async def serve_favicon(request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type="image/x-icon")
+    dist = _find_frontend_dist()
+    if dist:
+        fav = dist / "favicon.ico"
         if fav.exists():
             return FileResponse(fav)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        if (dist / "index.html").exists():
+            return FileResponse(dist / "index.html")
+    return Response(status_code=204)
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        # Do not catch API or documentation routes
-        if full_path.startswith(("api", "docs", "redoc", "openapi.json", "evidence", "uploads")):
-            raise HTTPException(status_code=404, detail="Not Found")
-        target = FRONTEND_DIST / full_path
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
+async def serve_spa(request: Request, full_path: str):
+    # Do not catch API or documentation routes
+    if full_path.startswith(("api", "docs", "redoc", "openapi.json", "evidence", "uploads", "health")):
+        raise HTTPException(status_code=404, detail="Not Found")
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type="text/html")
+    dist = _find_frontend_dist()
+    if dist:
+        target = dist / full_path
         if target.is_file():
             return FileResponse(target)
-        return FileResponse(FRONTEND_DIST / "index.html")
-else:
-    @app.get("/")
-    def serve_fallback_root():
-        return RedirectResponse(url="/docs")
+        if (dist / "index.html").exists():
+            return FileResponse(dist / "index.html")
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
 if __name__ == "__main__":
