@@ -338,4 +338,38 @@ def delete_dynamic_zone(zone_id: str) -> bool:
     return deleted
 
 
+# ─── Watchlist Cache Helpers ──────────────────────────────────────────────────
+_WATCHLIST_PERSONS_CACHE = None
+_WATCHLIST_VEHICLES_CACHE = None
+
+def get_cached_watchlist_persons():
+    global _WATCHLIST_PERSONS_CACHE
+    if _WATCHLIST_PERSONS_CACHE is None:
+        conn = get_conn()
+        rows = conn.execute("SELECT * FROM watchlist_persons ORDER BY created_at DESC").fetchall()
+        conn.close()
+        _WATCHLIST_PERSONS_CACHE = [dict(r) for r in rows]
+    return _WATCHLIST_PERSONS_CACHE
+
+def get_cached_watchlist_vehicles():
+    global _WATCHLIST_VEHICLES_CACHE
+    if _WATCHLIST_VEHICLES_CACHE is None:
+        conn = get_conn()
+        rows = conn.execute("SELECT * FROM watchlist_vehicles ORDER BY created_at DESC").fetchall()
+        conn.close()
+        _WATCHLIST_VEHICLES_CACHE = [dict(r) for r in rows]
+    return _WATCHLIST_VEHICLES_CACHE
+
+def invalidate_watchlist_cache():
+    global _WATCHLIST_PERSONS_CACHE, _WATCHLIST_VEHICLES_CACHE
+    _WATCHLIST_PERSONS_CACHE = None
+    _WATCHLIST_VEHICLES_CACHE = None
+    try:
+        from face_engine import get_face_engine
+        get_face_engine()._ref_embedding_cache.clear()
+    except Exception:
+        pass
+
+
+
 

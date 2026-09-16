@@ -134,6 +134,13 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
             pollRef.current = null;
             if (status.alerts_generated > 0) {
               onAlertsGenerated?.(status.alerts_generated);
+              window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', {
+                detail: {
+                  id: status.job_id,
+                  title: status.alert_summary || `${status.alerts_generated} Incident Alerts Generated`,
+                  severity: status.alert_summary?.includes('Watchlist') ? 'CRITICAL' : 'HIGH'
+                }
+              }));
             }
           }
         }
@@ -360,7 +367,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
           <div className="relative w-full h-[520px] rounded-xl overflow-hidden border border-[#424754]/30 bg-black shadow-xl flex items-center justify-center">
             {displayMode === 'stream' && (isRunning || isComplete) ? (
               <img
-                src="/api/video/stream"
+                src={`${getApiBaseUrl()}/video/stream`}
                 alt="AI Video Analysis Stream"
                 className="w-full h-full object-contain bg-black block"
               />

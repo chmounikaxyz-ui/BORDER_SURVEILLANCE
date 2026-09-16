@@ -2162,7 +2162,9 @@ def detect_live_frame(body: FrameDetectRequest):
         model = _get_model()
         if model:
             try:
-                results = model.predict(img, conf=0.20, verbose=False)
+                import torch
+                with torch.inference_mode():
+                    results = model.predict(img, conf=0.20, imgsz=384, verbose=False)
                 if results and results[0].boxes:
                     for box in results[0].boxes:
                         cls_id = int(box.cls[0])

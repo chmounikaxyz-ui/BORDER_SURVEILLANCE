@@ -66,7 +66,19 @@ def _ensure_lap_solver():
 
 _ensure_lap_solver()
 
-from database import get_conn
+import gc
+try:
+    import torch
+    torch.set_num_threads(1)
+    if hasattr(torch, "set_num_interop_threads"):
+        try:
+            torch.set_num_interop_threads(1)
+        except Exception:
+            pass
+except Exception:
+    pass
+
+from database import get_conn, get_cached_watchlist_persons, get_cached_watchlist_vehicles
 from evidence import save_evidence_frame, save_evidence_video
 from zone_rules import ZoneRulesEngine, get_severity, get_alert_category
 
@@ -156,7 +168,8 @@ def _update_job(job_id: str, **kwargs):
 
 
 def _generate_ai_analysis(class_name, zone, conf, risk, speed, track_id,
-                           activity_event=None, anpr_hit=None, reid_event=None) -> str:
+                           activity_event=None, anpr_hit=None, reid_event=None,
+                           matched_person=None, sim_score=0) -> str:
     zone_name   = zone["name"]
     sensitivity = zone["sensitivity"]
 
@@ -166,6 +179,15 @@ def _generate_ai_analysis(class_name, zone, conf, risk, speed, track_id,
         action = "Operator escalation recommended."
     else:
         action = "Continued monitoring recommended."
+
+    if matched_person:
+        return (
+            f"Deep SFace neural biometrics identified subject {matched_person['name'].upper()} "
+            f"with {sim_score}% facial landmark similarity. Priority target flagged in Watchlist Registry "
+            f"({matched_person.get('threat_level', 'CRITICAL')} priority). "
+            f"Optical tracking active via {zone.get('camera_code', 'CAM-ANALYSIS')} in {zone.get('sector', 'Perimeter')}. "
+            f"Movement vector: {speed}. Priority score {risk}/100 — {action}"
+        )
 
     text = (
         f"YOLOv8 neural inference identified {class_name} (Track ID: {track_id}) "
@@ -200,6 +222,8 @@ def _create_alert(
     anpr_hit: Optional[dict] = None,
     reid_event: Optional[dict] = None,
     video_url: Optional[str] = None,
+    matched_person: Optional[dict] = None,
+    sim_score: int = 0,
 ) -> None:
     zone       = intrusion["zone"]
     risk       = intrusion["risk_score"]
@@ -208,14 +232,20 @@ def _create_alert(
     class_name = intrusion["class_name"]
     activity   = intrusion.get("activity")
 
-    # Override title/category if ANPR hit
-    if anpr_hit:
+    # Override title/category if Biometric Watchlist Hit or ANPR Hit
+    if matched_person:
+        title    = f"WATCHLIST BIOMETRIC MATCH — {matched_person['name'].upper()} ({sim_score}%)"
+        category = "PERSONNEL"
+        severity = matched_person.get("threat_level", "CRITICAL")
+        risk     = max(risk, 98)
+    elif anpr_hit:
         make_model = f" ({anpr_hit.get('make', '')} {anpr_hit.get('model', '')})".replace("  ", " ").strip()
         if make_model == "()":
             make_model = ""
         title    = f"WATCHLIST ANPR HIT — {anpr_hit['plate_matched']}{make_model}"
         category = "VEHICLE"
         severity = anpr_hit.get("threat_level", "CRITICAL")
+        risk     = max(risk, 96)
     elif activity:
         act_name = activity.get("title", "Suspicious Activity")
         if class_name.lower() == "person":
@@ -246,6 +276,8 @@ def _create_alert(
             "status": "error",
             "active": True,
         },
+        *([{"title": f"Biometric Landmark Alignment: {matched_person['name'].upper()} ({sim_score}%)", "time": ts_str, "status": "error"}]
+          if matched_person else []),
         *([{"title": f"Activity: {activity['type']}", "time": ts_str, "status": "error"}]
           if activity else []),
         *([{"title": f"ANPR: {anpr_hit['plate_matched']}", "time": ts_str, "status": "error"}]
@@ -253,7 +285,7 @@ def _create_alert(
         *([{"title": f"ReID: {reid_event['from_camera']} → {reid_event['to_camera']}",
             "time": ts_str, "status": "primary"}]
           if reid_event else []),
-        {"title": "Pending Operator Action", "time": "--:--:--", "status": "pending"},
+        {"title": "Tactical Incident Record Committed", "time": ts_str, "status": "error" if severity == "CRITICAL" else "pending"},
     ])
 
     lat_deg = 34 + (frame_idx // 3600 % 60) / 100
@@ -269,14 +301,27 @@ def _create_alert(
     ai_text = _generate_ai_analysis(
         class_name, zone, conf, risk, speed_heading, track_id,
         activity, anpr_hit, reid_event,
+        matched_person=matched_person, sim_score=sim_score,
     )
 
     bbox_val = json.dumps(intrusion.get("bbox")) if intrusion.get("bbox") else None
     conn = get_conn()
 
-    # Deduplicate: Never insert duplicate alerts for the same plate or track
+    # Deduplicate: Never insert duplicate alerts for the same plate or person
     if anpr_hit:
         clean_target = re.sub(r'[^A-Z0-9]', '', (anpr_hit.get('plate_matched') or '').upper())
+        if clean_target:
+            existing = conn.execute(
+                """SELECT id FROM alerts
+                   WHERE REPLACE(REPLACE(REPLACE(title, ' ', ''), '-', ''), '(', '') LIKE ?
+                   AND status != 'DISMISSED' LIMIT 1""",
+                (f"%{clean_target}%",)
+            ).fetchone()
+            if existing:
+                conn.close()
+                return
+    elif matched_person:
+        clean_target = re.sub(r'[^A-Z0-9]', '', (matched_person.get('name') or '').upper())
         if clean_target:
             existing = conn.execute(
                 """SELECT id FROM alerts
@@ -311,7 +356,7 @@ def _create_alert(
             "PENDING VERIFICATION",
             class_name,
             f"TRK-{class_name[0]}{track_id:03d}-{track_id % 100:02d}",
-            round(conf, 3),
+            round(sim_score / 100.0, 2) if matched_person else round(conf, 3),
             risk,
             zone["sensitivity"],
             speed_heading,
@@ -324,6 +369,25 @@ def _create_alert(
             now.isoformat(),
         ),
     )
+
+    # Save Watchlist Biometric Match record in database
+    if matched_person:
+        try:
+            match_id = f"wm-{uuid.uuid4().hex[:8]}"
+            conn.execute(
+                """INSERT OR REPLACE INTO watchlist_matches
+                   (id, person_id, person_name, camera_code, similarity_score, status_type,
+                    status_label, verified_status, reference_image, captured_image, location_name, timestamp)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (match_id, matched_person["id"], matched_person["name"], zone.get("camera_code", "CAM-ANALYSIS"), sim_score,
+                 "critical" if matched_person.get("threat_level") in ["HIGH", "CRITICAL"] else "routine",
+                 f"MATCH: {matched_person['name'].upper()} ({sim_score}%)", "pending",
+                 matched_person.get("photo_base64", ""), image_url,
+                 f"{zone.get('sector', 'Sector')} ({zone.get('name', 'Perimeter Route')})", now.isoformat())
+            )
+        except Exception as werr:
+            print("[Detector Watchlist Match Save Notice]:", werr)
+
     conn.commit()
     conn.close()
 
@@ -453,35 +517,44 @@ class DetectionEngine:
                 fh, fw = frame.shape[:2]
                 scale = 1.0
                 infer_frame = frame
-                # Limit inference width to 640px for lightweight, memory-safe CPU/cloud execution
-                target_w = 640
+                # Limit inference width to 480px for lightweight, memory-safe CPU/cloud execution
+                target_w = 480
                 if fw > target_w:
                     scale = target_w / float(fw)
                     infer_frame = cv2.resize(frame, (target_w, int(fh * scale)))
 
-                # Run tracking with fallback to standard prediction if tracker encounters any issue
+                # Run tracking with fallback to standard prediction in torch.inference_mode()
+                results = None
                 try:
-                    results = model.track(
-                        infer_frame,
-                        persist=True,
-                        tracker="bytetrack.yaml",
-                        classes=TARGET_CLASSES,
-                        conf=0.35,
-                        verbose=False,
-                    )
+                    import torch
+                    with torch.inference_mode():
+                        try:
+                            results = model.track(
+                                infer_frame,
+                                persist=True,
+                                tracker="bytetrack.yaml",
+                                classes=TARGET_CLASSES,
+                                conf=0.30,
+                                imgsz=384,
+                                verbose=False,
+                            )
+                        except Exception:
+                            results = model.predict(
+                                infer_frame,
+                                classes=TARGET_CLASSES,
+                                conf=0.30,
+                                imgsz=384,
+                                verbose=False,
+                            )
                 except Exception as track_err:
-                    print(f"[Detector] Tracking notice ({track_err}); using prediction")
-                    results = model.predict(
-                        infer_frame,
-                        classes=TARGET_CLASSES,
-                        conf=0.35,
-                        verbose=False,
-                    )
+                    print(f"[Detector] Tracking error ({track_err})")
 
                 if not results or results[0].boxes is None:
                     # Still update the frame buffer with the raw frame
                     with _frame_lock:
                         _latest_frame = infer_frame.copy()
+                    del results
+                    del infer_frame
                     continue
 
                 boxes = results[0].boxes
@@ -679,6 +752,37 @@ class DetectionEngine:
                     if is_vehicle:
                         continue
 
+                    # ── Personnel / Person Face Watchlist Check ───────────────
+                    matched_person = None
+                    person_sim = 0
+                    if cls == 0:
+                        crop = frame[max(0, orig_y1):min(fh, orig_y2), max(0, orig_x1):min(fw, orig_x2)]
+                        if crop.size > 0:
+                            try:
+                                from face_engine import get_face_engine
+                                fe = get_face_engine()
+                                persons_db = get_cached_watchlist_persons()
+                                item_emb = fe.extract_128d_embedding(crop)
+                                best_match = None
+                                best_sim = 0
+                                for p in persons_db:
+                                    p_b64 = p.get("photo_base64")
+                                    if not p_b64:
+                                        continue
+                                    ref_emb = fe.get_reference_embedding(p_b64)
+                                    if ref_emb is not None:
+                                        s = fe.compute_similarity(item_emb, ref_emb) if item_emb is not None else fe.compute_similarity(crop, ref_emb)
+                                        if s > best_sim:
+                                            best_sim = s
+                                            best_match = p
+                                if best_sim >= 45 and best_match:
+                                    matched_person = best_match
+                                    person_sim = best_sim
+                            except Exception as f_err:
+                                pass
+
+                    is_watchlist_match = matched_person is not None
+
                     # ── Personnel / Other Object Zone check ───────────────────
                     intrusion = zone_engine.check_intrusion(
                         track_id=track_id, cx=cx, cy=cy,
@@ -688,7 +792,7 @@ class DetectionEngine:
                         speed_kmh=speed_kmh,
                     )
                     # For video analysis footage: ensure detected persons trigger suspicious behavior
-                    if not intrusion and cls == 0 and conf >= 0.35:
+                    if not intrusion and cls == 0 and conf >= 0.30:
                         intrusion = {
                             "zone": {
                                 "id": "zone-perimeter-analysis",
@@ -702,7 +806,7 @@ class DetectionEngine:
                             "category": "personnel",
                             "class_name": "Person",
                             "confidence": conf,
-                            "risk_score": 88,
+                            "risk_score": 98 if is_watchlist_match else 88,
                             "cx_norm": cx / fw,
                             "cy_norm": cy / fh,
                             "timestamp_s": frame_idx / fps,
@@ -710,8 +814,8 @@ class DetectionEngine:
                         }
 
                     # ── Personnel / Person Tracking & Suspicious Behaviour ─────
-                    person_color = (0, 0, 245) if (intrusion or track_id in alerted_tracks) else (210, 100, 255)
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), person_color, 2)
+                    person_color = (0, 0, 245) if (is_watchlist_match or intrusion or track_id in alerted_tracks) else (210, 100, 255)
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), person_color, 3 if is_watchlist_match else 2)
 
                     c_len = min(16, max(4, (x2 - x1) // 4), max(4, (y2 - y1) // 4))
                     cv2.line(annotated, (x1, y1), (x1 + c_len, y1), person_color, 3)
@@ -723,7 +827,13 @@ class DetectionEngine:
                     cv2.line(annotated, (x2, y2), (x2 - c_len, y2), person_color, 3)
                     cv2.line(annotated, (x2, y2), (x2, y2 - c_len), person_color, 3)
 
-                    person_label = f"SUSPICIOUS BEHAVIOR: PERSON #{track_id} ({conf:.0%})" if (intrusion or track_id in alerted_tracks) else f"PERSON #{track_id} ({conf:.0%})"
+                    if is_watchlist_match:
+                        person_label = f"WATCHLIST MATCH: {matched_person['name'].upper()} ({person_sim}%)"
+                    elif intrusion or track_id in alerted_tracks:
+                        person_label = f"SUSPICIOUS BEHAVIOR: PERSON #{track_id} ({conf:.0%})"
+                    else:
+                        person_label = f"PERSON #{track_id} ({conf:.0%})"
+
                     (pw, ph), _ = cv2.getTextSize(person_label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
                     badge_py1 = max(0, y1 - ph - 8)
                     cv2.rectangle(annotated, (x1, badge_py1), (x1 + pw + 8, y1), person_color, -1)
@@ -735,12 +845,15 @@ class DetectionEngine:
                          "class_name": "Person", "conf": conf, "is_target": True}
                     ]
 
-                    if intrusion and track_id not in alerted_tracks:
+                    if (is_watchlist_match or intrusion) and track_id not in alerted_tracks:
                         alerts_generated += 1
                         alerted_tracks.add(track_id)
                         alert_id = f"ALRT-{uuid.uuid4().hex[:6].upper()}"
-                        zone_title = intrusion.get("zone", {}).get("name", "Perimeter Area")
-                        alert_summaries.append(f"Suspicious Behaviour: Person #{track_id} ({zone_title})")
+                        if is_watchlist_match:
+                            alert_summaries.append(f"Watchlist Match: {matched_person['name']} ({person_sim}%)")
+                        else:
+                            zone_title = intrusion.get("zone", {}).get("name", "Perimeter Area") if intrusion else "Perimeter Area"
+                            alert_summaries.append(f"Suspicious Behaviour: Person #{track_id} ({zone_title})")
 
                         try:
                             filename, i_hash, f_hash = save_evidence_frame(
@@ -758,7 +871,7 @@ class DetectionEngine:
                             if crop.size > 0:
                                 reid_event = reid_store.process(
                                     crop=crop,
-                                    camera_code=intrusion["zone"]["camera_code"],
+                                    camera_code=intrusion["zone"]["camera_code"] if intrusion else "CAM-ANALYSIS",
                                     track_id=track_id,
                                     alert_id=alert_id,
                                 )
@@ -769,7 +882,22 @@ class DetectionEngine:
 
                         _create_alert(
                             alert_id=alert_id,
-                            intrusion=intrusion,
+                            intrusion=intrusion or {
+                                "zone": {
+                                    "id": "zone-perimeter-analysis",
+                                    "name": "Monitored Perimeter Route",
+                                    "sensitivity": "Class A (Restricted)",
+                                    "sector": "Sector East, Perimeter Route",
+                                    "camera_code": "CAM-ANALYSIS",
+                                },
+                                "track_id": track_id,
+                                "cls": cls,
+                                "category": "personnel",
+                                "class_name": "Person",
+                                "confidence": conf,
+                                "risk_score": 98 if is_watchlist_match else 88,
+                                "bbox": [orig_x1 / fw, orig_y1 / fh, orig_x2 / fw, orig_y2 / fh],
+                            },
                             speed_heading=speed_str,
                             image_url=image_url,
                             integrity_hash=i_hash,
@@ -779,11 +907,20 @@ class DetectionEngine:
                             anpr_hit=None,
                             reid_event=reid_event,
                             video_url=vid_url,
+                            matched_person=matched_person,
+                            sim_score=person_sim,
                         )
 
                 # ── Update shared frame buffer for MJPEG streaming ─────────────
                 with _frame_lock:
                     _latest_frame = annotated.copy()
+
+                # Memory safety cleanup per frame
+                del results
+                del infer_frame
+                del annotated
+                if frame_idx % 10 == 0:
+                    gc.collect()
 
                 # Pacing so the browser receives a steady, visible live video feed
                 time.sleep(max(0.015, 1.0 / (fps * 1.2)))
