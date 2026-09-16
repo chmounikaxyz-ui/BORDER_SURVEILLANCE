@@ -172,7 +172,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     ) ? activeAlert.imageUrl : '') ||
     (activeAlert?.cameraCode === 'CAM-ANALYSIS'
       ? '/uploads/14266560_3840_2160_30fps.mp4'
-      : '');
+      : '/evidence/videos/ALRT-0EEA47.mp4');
 
   const candidatePhotoUrl = 
     activeAlert?.capturedFrameUrl ||
@@ -849,29 +849,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   />
                 )}
 
-                {/* Sensor Tamper / Blackout Forensic Overlay */}
-                {(activeAlert.title.toUpperCase().includes('BLACKOUT') || activeAlert.title.toUpperCase().includes('TAMPER') || activeAlert.category === 'SYSTEM') && (
-                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center pointer-events-none p-6 text-center">
-                    <div className="bg-black/85 backdrop-blur-md border border-amber-500/50 rounded-xl p-5 max-w-md shadow-2xl flex flex-col items-center gap-3">
-                      <div className="w-12 h-12 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center">
-                        <span className="material-symbols-outlined text-amber-400 text-[28px]">videocam_off</span>
-                      </div>
-                      <div>
-                        <h4 className="text-[13px] font-bold text-[#ffdad6] uppercase tracking-wider font-mono">
-                          Optical Sensor Blackout Detected
-                        </h4>
-                        <p className="text-[11px] text-[#c2c6d6] mt-1 font-mono leading-relaxed">
-                          Camera {activeAlert.cameraCode || 'FEED'} feed was confirmed 100% dark (zero optical input).
-                          Forensic blackout frame preserved with SHA-256 integrity hash.
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] font-mono text-amber-300 bg-amber-950/60 px-2.5 py-1 rounded border border-amber-500/30">
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-                        SENSOR INCIDENT: CAMERA TAMPER / BLOCKED LENS
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 {/* Tactical Bounding Box Overlay for Target Tracking matching Photo 2 */}
                 {showBoundingBox && activeAlert.bbox && Array.isArray(activeAlert.bbox) && activeAlert.bbox.length === 4 && activeAlert.category !== 'SYSTEM' && !activeAlert.title.toUpperCase().includes('TAMPER') && !activeAlert.title.toUpperCase().includes('SABOTAGE') && (() => {

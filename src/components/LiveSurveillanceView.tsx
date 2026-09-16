@@ -86,6 +86,7 @@ const CameraFeedCell: React.FC<{
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const headerChunkRef = useRef<Blob | null>(null);
     const videoChunksRef = useRef<Blob[]>([]);
+    const isDetectingRef = useRef(false);
     const [webcamError, setWebcamError] = useState<string | null>(null);
     const [liveDetections, setLiveDetections] = useState<{ class: string; confidence: number; bbox: number[]; match_name?: string; match_score?: number }[]>([]);
     const [tamperInfo, setTamperInfo] = useState<{ type: string; reason: string } | null>(null);
@@ -245,14 +246,22 @@ const CameraFeedCell: React.FC<{
         const payload = {
           image_base64: dataUrl,
           video_base64: videoBase64 || "",
-          camera_code: cam?.code || 'CAM-LIVE'
+          camera_code: cam?.code || 'CAM-LIVE-78',
+          is_manual_capture: true,
+          create_alert: true
         };
 
-        await fetch(`${getApiBaseUrl()}/detect/frame`, {
+        const res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.alert_created && data.new_alert) {
+            window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', { detail: data.new_alert }));
+          }
+        }
 
         setTimeout(() => setIsSavingClip(false), 2000);
       } catch (err) {
@@ -260,53 +269,49 @@ const CameraFeedCell: React.FC<{
       }
     };
 
-    // Live frame detection loop (POST canvas frames to backend every 600ms)
+    // Live frame detection loop (POST lightweight canvas frames to backend every 600ms)
     useEffect(() => {
       if (!aiOverlaysEnabled || !cam) return;
       if (!isWebcam && cam.status !== 'online') return;
 
       const interval = setInterval(async () => {
-        let dataUrl: string | null = null;
-        let videoBase64: string | null = null;
+        if (isDetectingRef.current) return;
+        isDetectingRef.current = true;
 
-        if (isWebcam && videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
-          const canvas = canvasRef.current || document.createElement('canvas');
-          canvas.width = 640;
-          canvas.height = 360;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(videoRef.current, 0, 0, 640, 360);
-            dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-          }
-          if (videoChunksRef.current.length > 0) {
-            videoBase64 = await getRollingVideoBase64();
-          }
-        } else if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
-          try {
+        try {
+          let dataUrl: string | null = null;
+
+          if (isWebcam && videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
             const canvas = canvasRef.current || document.createElement('canvas');
             canvas.width = 640;
             canvas.height = 360;
             const ctx = canvas.getContext('2d');
             if (ctx) {
-              ctx.drawImage(imgRef.current, 0, 0, 640, 360);
+              ctx.drawImage(videoRef.current, 0, 0, 640, 360);
               dataUrl = canvas.toDataURL('image/jpeg', 0.6);
             }
-            if (videoChunksRef.current.length > 0) {
-              videoBase64 = await getRollingVideoBase64();
+          } else if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
+            try {
+              const canvas = canvasRef.current || document.createElement('canvas');
+              canvas.width = 640;
+              canvas.height = 360;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(imgRef.current, 0, 0, 640, 360);
+                dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+              }
+            } catch (e) {
+              // Cross-origin image fallback
             }
-          } catch (e) {
-            // Cross-origin image fallback
           }
-        }
 
-        const payload = dataUrl
-          ? { image_base64: dataUrl, video_base64: videoBase64 || "", camera_code: cam.code || 'CAM-LIVE', create_alert: true }
-          : cam.imageUrl
-            ? { image_url: cam.imageUrl, video_base64: videoBase64 || "", camera_code: cam.code || 'CAM-LIVE', create_alert: true }
-            : null;
+          const payload = dataUrl
+            ? { image_base64: dataUrl, camera_code: cam.code || 'CAM-LIVE-78', create_alert: true }
+            : cam.imageUrl
+              ? { image_url: cam.imageUrl, camera_code: cam.code || 'CAM-LIVE-78', create_alert: true }
+              : null;
 
-        if (payload) {
-          try {
+          if (payload) {
             let res: Response;
             try {
               res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
@@ -339,44 +344,30 @@ const CameraFeedCell: React.FC<{
                 setLiveDetections(data.detections);
                 if (data.alert_created && data.new_alert) {
                   window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', { detail: data.new_alert }));
+                  // Asynchronously upload recorded video clip in background without blocking frame detection
+                  if (videoChunksRef.current && videoChunksRef.current.length > 0) {
+                    getRollingVideoBase64().then((vidB64) => {
+                      if (vidB64) {
+                        fetch(`${getApiBaseUrl()}/alerts/${data.new_alert.id}/video`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ video_base64: vidB64 })
+                        }).catch(() => {});
+                      }
+                    }).catch(() => {});
+                  }
                 }
                 return;
               }
             }
-          } catch (err) {
-            try {
-              const res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-              });
-              if (res.ok) {
-                const data = await res.json();
-                if (data.tamper_detected) {
-                  setTamperInfo({ type: data.tamper_type, reason: data.tamper_reason });
-                  setLiveDetections([]);
-                  if (data.alert_created && data.new_alert) {
-                    window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', { detail: data.new_alert }));
-                  }
-                  return;
-                } else {
-                  setTamperInfo(null);
-                }
-
-                if (data && Array.isArray(data.detections)) {
-                  setLiveDetections(data.detections);
-                  if (data.alert_created && data.new_alert) {
-                    window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', { detail: data.new_alert }));
-                  }
-                  return;
-                }
-              }
-            } catch {}
           }
+          setLiveDetections([]);
+        } catch (err) {
+          // Network or frame grab error
+        } finally {
+          isDetectingRef.current = false;
         }
-
-        setLiveDetections([]);
-      }, 600);
+      }, 500);
 
       return () => clearInterval(interval);
     }, [isWebcam, aiOverlaysEnabled, cam?.id, cam?.code, cam?.imageUrl, cam?.status, cam?.hasAlert]);

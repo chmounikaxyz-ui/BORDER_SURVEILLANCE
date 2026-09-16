@@ -217,6 +217,7 @@ class FrameDetectRequest(BaseModel):
     video_base64: Optional[str] = ""
     camera_code: Optional[str] = "CAM-LIVE"
     create_alert: Optional[bool] = True
+    is_manual_capture: Optional[bool] = False
 
 
 # ─── Dynamic Custom Zones ──────────────────────────────────────────────────────
@@ -260,6 +261,6 @@ class AnprScanResponse(BaseModel):
     matched_watchlist: Optional[WatchlistVehicleResponse] = None
     alert_created: bool = False
     alert_id: Optional[str] = None
-
-
+class AlertVideoUpload(BaseModel):
+    video_base64: str
 
