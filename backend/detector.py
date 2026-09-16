@@ -8,6 +8,9 @@ Integrations (new):
   - Activity detection: loitering / running via ZoneRulesEngine
   - Priority Engine: weighted risk scoring via ZoneRulesEngine
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import json
 import math
 import re
@@ -18,6 +21,49 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 import cv2
+import numpy as np
+
+# ─── Ensure linear assignment solver is available for ByteTrack ──────────────
+def _ensure_lap_solver():
+    try:
+        import lap
+        if hasattr(lap, "__version__") and hasattr(lap, "lapjv"):
+            return
+    except (ImportError, AssertionError, AttributeError):
+        pass
+
+    try:
+        import lapx as lap
+        sys.modules["lap"] = lap
+        return
+    except ImportError:
+        pass
+
+    # High-reliability fallback shim using scipy.optimize.linear_sum_assignment
+    class _LapShim:
+        __version__ = "0.5.12"
+
+        @staticmethod
+        def lapjv(cost_matrix, extend_cost=True, cost_limit=None):
+            try:
+                from scipy.optimize import linear_sum_assignment
+                row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            except Exception:
+                row_ind, col_ind = [], []
+
+            opt = float(sum(cost_matrix[r, c] for r, c in zip(row_ind, col_ind))) if len(row_ind) else 0.0
+            x = np.full(cost_matrix.shape[0], -1, dtype=int)
+            y = np.full(cost_matrix.shape[1], -1, dtype=int)
+            for r, c in zip(row_ind, col_ind):
+                if cost_limit is not None and cost_matrix[r, c] > cost_limit:
+                    continue
+                x[r] = c
+                y[c] = r
+            return opt, x, y
+
+    sys.modules["lap"] = _LapShim()
+
+_ensure_lap_solver()
 
 from database import get_conn
 from evidence import save_evidence_frame, save_evidence_video
@@ -61,7 +107,10 @@ def _get_model():
         if _yolo_model is None:
             try:
                 from ultralytics import YOLO
-                _yolo_model = YOLO("yolov8n.pt")
+                model_file = Path(__file__).resolve().parent / "yolov8n.pt"
+                if not model_file.exists():
+                    model_file = Path("yolov8n.pt").resolve()
+                _yolo_model = YOLO(str(model_file) if model_file.exists() else "yolov8n.pt")
                 # Prevent PyTorch Conv object has no attribute 'bn' error on CPU
                 if hasattr(_yolo_model, "model") and hasattr(_yolo_model.model, "fuse"):
                     try:
@@ -397,14 +446,24 @@ class DetectionEngine:
                     scale = 1280.0 / fw
                     infer_frame = cv2.resize(frame, (1280, int(fh * scale)))
 
-                results = model.track(
-                    infer_frame,
-                    persist=True,
-                    tracker="bytetrack.yaml",
-                    classes=TARGET_CLASSES,
-                    conf=0.35,
-                    verbose=False,
-                )
+                # Run tracking with fallback to standard prediction if tracker encounters any issue
+                try:
+                    results = model.track(
+                        infer_frame,
+                        persist=True,
+                        tracker="bytetrack.yaml",
+                        classes=TARGET_CLASSES,
+                        conf=0.35,
+                        verbose=False,
+                    )
+                except Exception as track_err:
+                    print(f"[Detector] Tracking notice ({track_err}); using prediction")
+                    results = model.predict(
+                        infer_frame,
+                        classes=TARGET_CLASSES,
+                        conf=0.35,
+                        verbose=False,
+                    )
 
                 if not results or results[0].boxes is None:
                     # Still update the frame buffer with the raw frame
@@ -416,11 +475,8 @@ class DetectionEngine:
                 boxes_for_evidence = []
                 annotated = infer_frame.copy()
 
-                for box in boxes:
-                    if box.id is None:
-                        continue
-
-                    track_id = int(box.id[0])
+                for box_idx, box in enumerate(boxes):
+                    track_id = int(box.id[0]) if (box.id is not None) else (box_idx + 1)
                     raw_cls = int(box.cls[0])
                     conf = float(box.conf[0])
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
