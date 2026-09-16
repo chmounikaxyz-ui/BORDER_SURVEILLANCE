@@ -410,7 +410,7 @@ class DetectionEngine:
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
         fps          = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        _update_job(job_id, status="running", total_frames=total_frames)
+        _update_job(job_id, status="running", total_frames=total_frames, current_frame=1, progress=1)
         print(f"[Detector] Job {job_id} — {total_frames} frames @ {fps:.1f} fps")
 
         # Read first frame immediately so stream never shows idle placeholder
@@ -788,17 +788,16 @@ class DetectionEngine:
                 # Pacing so the browser receives a steady, visible live video feed
                 time.sleep(max(0.015, 1.0 / (fps * 1.2)))
 
-                # ── Progress update every 3 frames for continuous progress feedback ─────
-                if frame_idx % 3 == 0:
-                    progress = min(99, int(frame_idx / total_frames * 100))
-                    summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
-                    _update_job(
-                        job_id,
-                        progress=progress,
-                        current_frame=frame_idx,
-                        alerts_generated=alerts_generated,
-                        alert_summary=summary_text,
-                    )
+                # ── Progress update every frame for continuous progress feedback ─────
+                progress = min(99, max(1, int(frame_idx / total_frames * 100)))
+                summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
+                _update_job(
+                    job_id,
+                    progress=progress,
+                    current_frame=frame_idx,
+                    alerts_generated=alerts_generated,
+                    alert_summary=summary_text,
+                )
 
         finally:
             cap.release()

@@ -2110,6 +2110,12 @@ def detect_live_frame(body: FrameDetectRequest):
             return {"detections": []}
 
         h, w, _ = img.shape
+        # Downscale large frames to 640px max width for <35ms cloud CPU execution
+        if w > 640:
+            scale_f = 640.0 / float(w)
+            img = cv2.resize(img, (640, int(h * scale_f)))
+            h, w = img.shape[:2]
+
         detections = []
         found_faces_or_persons = []
         alert_created = False
@@ -2152,7 +2158,7 @@ def detect_live_frame(body: FrameDetectRequest):
         except Exception as e:
             print(f"[FaceDetect] YuNet pass error: {e}")
 
-        # 2. Try YOLOv8 model for general persons and vehicles
+        # 2. YOLOv8 model for general persons and vehicles
         model = _get_model()
         if model:
             try:
@@ -2179,50 +2185,6 @@ def detect_live_frame(body: FrameDetectRequest):
                             })
             except Exception as e:
                 print(f"[Detector] YOLO frame pass error: {e}")
-
-        # 3. OpenCV Multi-Cascade Face & Person Detection Fallback (if YuNet and YOLO missed)
-        if not found_faces_or_persons:
-            try:
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-                gray_clahe = clahe.apply(gray)
-                gray_eq = cv2.equalizeHist(gray)
-
-                cats = _get_face_cascades()
-                for g in [gray_clahe, gray, gray_eq]:
-                    for cat in cats:
-                        try:
-                            matches = cat.detectMultiScale(g, scaleFactor=1.08, minNeighbors=3, minSize=(30, 30))
-                            for (fx, fy, fw, fh) in matches:
-                                found_faces_or_persons.append({
-                                    "class": "Person",
-                                    "confidence": 0.95,
-                                    "bbox": [fx / w, fy / h, (fx + fw) / w, (fy + fh) / h],
-                                    "raw_xyxy": [fx, fy, fx + fw, fh + fy]
-                                })
-                        except Exception:
-                            pass
-                    if found_faces_or_persons:
-                        break
-
-                # Upperbody & HOG People Detector if face cascade missed
-                if not found_faces_or_persons:
-                    try:
-                        ub_cas = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_upperbody.xml')
-                        if not ub_cas.empty():
-                            ub_matches = ub_cas.detectMultiScale(gray_clahe, scaleFactor=1.08, minNeighbors=3, minSize=(60, 60))
-                            for (fx, fy, fw, fh) in ub_matches:
-                                found_faces_or_persons.append({
-                                    "class": "Person",
-                                    "confidence": 0.92,
-                                    "bbox": [fx / w, fy / h, (fx + fw) / w, (fy + fh) / h],
-                                    "raw_xyxy": [fx, fy, fx + fw, fh + fy]
-                                })
-                    except Exception:
-                        pass
-
-            except Exception as exc:
-                print(f"[Face/Person Detection] Error: {exc}")
 
         # If manual operator capture requested, ensure an item is processed even without automatic target
         if not found_faces_or_persons and getattr(body, "is_manual_capture", False):
@@ -2308,12 +2270,12 @@ def detect_live_frame(body: FrameDetectRequest):
                             s = face_engine.compute_similarity(item_embedding, ref_emb)
                         elif crop.size > 0:
                             s = face_engine.compute_similarity(crop, ref_emb)
-                        if s >= 60:
+                        if s >= 45:
                             candidate_matches.append((p, s))
 
                 candidate_matches.sort(key=lambda x: x[1], reverse=True)
 
-                # Genuine match threshold (SFace verified identity score >= 60%)
+                # Verified identity score threshold (>= 45% handles hoodies, angles, light variations)
                 if candidate_matches:
                     top_p, top_sim = candidate_matches[0]
                     best_match = top_p

@@ -17,17 +17,18 @@ export type { ReidTrajectory };
 
 export function getApiBaseUrl(): string {
   const envUrl = (import.meta.env.VITE_API_URL as string)?.trim();
-  if (envUrl) return envUrl.replace(/\/$/, '');
-
   const winUrl = (typeof window !== 'undefined' && (window as any).__API_URL__)?.trim();
-  if (winUrl) return winUrl.replace(/\/$/, '');
-
+  let stored = '';
   try {
-    const stored = localStorage.getItem('bordervision_api_url')?.trim();
-    if (stored) return stored.replace(/\/$/, '');
+    stored = localStorage.getItem('bordervision_api_url')?.trim() || '';
   } catch {}
 
-  return '/api';
+  let url = envUrl || winUrl || stored || '/api';
+  url = url.replace(/\/$/, '');
+  if (!url.endsWith('/api')) {
+    url = `${url}/api`;
+  }
+  return url;
 }
 
 export function setCustomApiUrl(url: string): void {
