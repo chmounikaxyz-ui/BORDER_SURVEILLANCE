@@ -9,6 +9,11 @@ Integrations (new):
   - Priority Engine: weighted risk scoring via ZoneRulesEngine
 """
 import sys
+import os
+import tempfile
+_yolo_dir = os.environ.get("YOLO_CONFIG_DIR") or os.path.join(tempfile.gettempdir(), "Ultralytics")
+os.environ["YOLO_CONFIG_DIR"] = _yolo_dir
+os.makedirs(_yolo_dir, exist_ok=True)
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import json
@@ -102,11 +107,21 @@ def _get_model():
     with _yolo_lock:
         if _yolo_model is None:
             try:
+                os.environ["YOLO_CONFIG_DIR"] = os.environ.get("YOLO_CONFIG_DIR", "/tmp/Ultralytics")
                 from ultralytics import YOLO
-                model_file = Path(__file__).resolve().parent / "yolov8n.pt"
-                if not model_file.exists():
-                    model_file = Path("yolov8n.pt").resolve()
-                _yolo_model = YOLO(str(model_file) if model_file.exists() else "yolov8n.pt")
+                candidate_paths = [
+                    Path(__file__).resolve().parent / "yolov8n.pt",
+                    Path("yolov8n.pt").resolve(),
+                    Path("backend/yolov8n.pt").resolve(),
+                    Path("/opt/render/project/src/backend/yolov8n.pt"),
+                    Path("/opt/render/project/src/yolov8n.pt"),
+                    Path("/tmp/yolov8n.pt"),
+                ]
+                model_file = next((p for p in candidate_paths if p.exists()), None)
+                if model_file:
+                    _yolo_model = YOLO(str(model_file))
+                else:
+                    _yolo_model = YOLO("yolov8n.pt")
                 # Prevent PyTorch Conv object has no attribute 'bn' error on CPU
                 if hasattr(_yolo_model, "model") and hasattr(_yolo_model.model, "fuse"):
                     try:

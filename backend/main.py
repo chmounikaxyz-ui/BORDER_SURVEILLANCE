@@ -5,6 +5,10 @@ Run with:  uvicorn main:app --reload --port 8000
 import sys
 import json
 import os
+import tempfile
+_yolo_dir = os.environ.get("YOLO_CONFIG_DIR") or os.path.join(tempfile.gettempdir(), "Ultralytics")
+os.environ["YOLO_CONFIG_DIR"] = _yolo_dir
+os.makedirs(_yolo_dir, exist_ok=True)
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import re
@@ -139,10 +143,28 @@ async def lifespan(app: FastAPI):
                  "Suspect vehicle identified in highway surveillance footage", "", now_str, "Operator")
             )
 
-        # Ensure default watchlist persons exist if table is empty
+        # Ensure watchlist persons from watchlist_seed.json exist
+        now_str = datetime.now(timezone.utc).isoformat()
+        seed_file = Path(__file__).resolve().parent / "watchlist_seed.json"
+        if seed_file.exists():
+            try:
+                with open(seed_file, "r") as sf:
+                    seed_data = json.load(sf)
+                for item in seed_data:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO watchlist_persons
+                           (id, name, alias, nationality, threat_level, notes, photo_base64, created_at, added_by)
+                           VALUES (?,?,?,?,?,?,?,?,?)""",
+                        (item["id"], item["name"], item.get("alias", ""), item.get("nationality", ""),
+                         item.get("threat_level", "MEDIUM"), item.get("notes", ""), item.get("photo_base64", ""),
+                         item.get("created_at", now_str), item.get("added_by", "Operator"))
+                    )
+                print(f"[Seed] Loaded {len(seed_data)} watchlist reference profiles [OK]")
+            except Exception as s_err:
+                print("[Seed Error]:", s_err)
+
         p_count = conn.execute("SELECT COUNT(*) FROM watchlist_persons").fetchone()[0]
         if p_count == 0:
-            now_str = datetime.now(timezone.utc).isoformat()
             conn.execute(
                 """INSERT INTO watchlist_persons
                    (id, name, alias, nationality, threat_level, notes, photo_base64, created_at, added_by)
@@ -169,6 +191,17 @@ async def lifespan(app: FastAPI):
     camera_codes = [cam["code"] for cam in CAMERAS_DATA]
     start_monitor(camera_codes)
     ensure_sample_videos()
+
+    # Preload and warm up AI models so user requests never stall on downloads or disk I/O
+    try:
+        from detector import _get_model
+        _get_model()
+        from face_engine import get_face_engine
+        get_face_engine()
+        print("[Startup] YOLOv8 and FaceEngine biometrics preloaded and ready [OK]")
+    except Exception as exc:
+        print("[Startup] Model preload notice:", exc)
+
     api_port = os.environ.get("PORT", "8000")
     print(f"[BorderVision API] Ready on port {api_port}")
     try:
@@ -2770,11 +2803,11 @@ def _relative_time(created_at: str) -> str:
 
 def _find_frontend_dist():
     for candidate in [
-        Path(__file__).resolve().parent / "dist",
         Path(__file__).resolve().parent.parent / "dist",
         Path("dist").resolve(),
-        Path("backend/dist").resolve(),
         Path("/opt/render/project/src/dist"),
+        Path(__file__).resolve().parent / "dist",
+        Path("backend/dist").resolve(),
         Path("/opt/render/project/src/backend/dist"),
     ]:
         if candidate.exists() and (candidate / "index.html").exists():

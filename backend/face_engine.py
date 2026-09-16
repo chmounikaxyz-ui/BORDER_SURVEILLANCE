@@ -23,9 +23,39 @@ class DeepFaceEngine:
     def _init_models(self):
         """Initializes OpenCV YuNet & SFace deep learning models from backend/models/."""
         try:
-            models_dir = os.path.join(os.path.dirname(__file__), "models")
+            candidates = [
+                os.path.join(os.path.dirname(__file__), "models"),
+                os.path.join(os.getcwd(), "backend", "models"),
+                os.path.join(os.getcwd(), "models"),
+                "/opt/render/project/src/backend/models",
+                "/opt/render/project/src/models",
+            ]
+            models_dir = next((d for d in candidates if os.path.isdir(d)), os.path.join(os.path.dirname(__file__), "models"))
+            os.makedirs(models_dir, exist_ok=True)
+
             yunet_path = os.path.join(models_dir, "face_detection_yunet_2023mar.onnx")
             sface_path = os.path.join(models_dir, "face_recognition_sface_2021dec.onnx")
+
+            # Auto-download from OpenCV Zoo if missing
+            if not os.path.exists(yunet_path):
+                try:
+                    print("[FaceEngine] Downloading YuNet face detection model...")
+                    urllib.request.urlretrieve(
+                        "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+                        yunet_path
+                    )
+                except Exception as dl_err:
+                    print("[FaceEngine] Could not auto-download YuNet:", dl_err)
+
+            if not os.path.exists(sface_path):
+                try:
+                    print("[FaceEngine] Downloading SFace face recognition model...")
+                    urllib.request.urlretrieve(
+                        "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+                        sface_path
+                    )
+                except Exception as dl_err:
+                    print("[FaceEngine] Could not auto-download SFace:", dl_err)
 
             if os.path.exists(yunet_path) and os.path.exists(sface_path):
                 if hasattr(cv2, "FaceDetectorYN") and hasattr(cv2, "FaceRecognizerSF"):

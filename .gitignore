@@ -32,8 +32,11 @@ venv/
 .venv/
 env/
 
-# Large model weights (downloaded automatically on start)
-*.onnx
+# Model weights
 *.pt
-backend/models/*.onnx
+*.onnx
 backend/models/*.pt
+
+# Whitelist lightweight models needed for deployment
+!backend/yolov8n.pt
+!backend/models/*.onnx
