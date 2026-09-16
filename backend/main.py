@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 
 from data import CAMERAS_DATA
+from database import get_conn, init_db
 from detector import DetectionEngine, _ensure_lap_solver
 _ensure_lap_solver()
 from models import (AlertStatusUpdate, VideoJobRequest,
