@@ -58,6 +58,19 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right: Clock & Quick Actions */}
       <div className="flex items-center gap-4 shrink-0">
+        {/* API Backend Live Status Pill */}
+        <div
+          title={apiConnected ? "FastAPI Neural Backend Online" : "Backend Disconnected or Cold-Starting — Running in Local Storage Mode"}
+          className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wider uppercase border transition-colors ${
+            apiConnected
+              ? "bg-emerald-950/40 text-emerald-400 border-emerald-500/30"
+              : "bg-amber-950/40 text-amber-300 border-amber-500/30"
+          }`}
+        >
+          <span className={`w-2 h-2 rounded-full ${apiConnected ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+          {apiConnected ? "API LIVE" : "LOCAL MODE"}
+        </div>
+
         <button
           onClick={onOpenAddCameraModal}
           className="px-3 py-1.5 bg-[#4d8eff] hover:bg-[#adc6ff] text-[#00285d] font-bold rounded-lg text-[11px] uppercase tracking-wider transition-colors shadow flex items-center gap-1.5"

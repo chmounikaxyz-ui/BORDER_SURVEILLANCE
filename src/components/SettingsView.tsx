@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { getApiBaseUrl, setCustomApiUrl, checkHealth } from '../api/client';
 
 export const SettingsView: React.FC = () => {
   const [sensitivity, setSensitivity] = useState(85);
@@ -11,7 +12,44 @@ export const SettingsView: React.FC = () => {
   const [encryptionStandard, setEncryptionStandard] = useState('AES-256-GCM');
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  // Cloud API & Backend URL settings
+  const [apiUrl, setApiUrl] = useState('');
+  const [isTestingApi, setIsTestingApi] = useState(false);
+  const [apiStatus, setApiStatus] = useState<'unknown' | 'online' | 'offline'>('unknown');
+  const [apiFeedback, setApiFeedback] = useState('');
+
+  useEffect(() => {
+    setApiUrl(getApiBaseUrl());
+    checkHealth().then(ok => setApiStatus(ok ? 'online' : 'offline'));
+  }, []);
+
+  const handleTestApi = async () => {
+    setIsTestingApi(true);
+    setApiFeedback('');
+    setCustomApiUrl(apiUrl);
+    try {
+      const ok = await checkHealth();
+      setApiStatus(ok ? 'online' : 'offline');
+      setApiFeedback(ok ? 'Successfully connected to FastAPI backend!' : 'Could not reach backend. Verify URL or check if Render service is cold-starting.');
+    } catch {
+      setApiStatus('offline');
+      setApiFeedback('Connection attempt failed.');
+    } finally {
+      setIsTestingApi(false);
+    }
+  };
+
+  const handleResetApi = () => {
+    setCustomApiUrl('');
+    setApiUrl('/api');
+    checkHealth().then(ok => {
+      setApiStatus(ok ? 'online' : 'offline');
+      setApiFeedback('Reset to default /api proxy.');
+    });
+  };
+
   const handleSave = () => {
+    setCustomApiUrl(apiUrl);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
   };
@@ -200,6 +238,67 @@ export const SettingsView: React.FC = () => {
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Card 3: Cloud Deployment & Backend API Connection */}
+        <div className="bg-[#17202e] p-6 rounded-xl border border-[#424754]/30 space-y-4 lg:col-span-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <h3 className="text-[16px] font-bold text-[#dae3f7] flex items-center gap-2">
+              <span className="material-symbols-outlined text-[#adc6ff]">dns</span>
+              Backend API & Neural Server Connection
+            </h3>
+            <div className="flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full ${apiStatus === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              <span className="text-[12px] font-mono uppercase font-bold text-[#c2c6d6]">
+                {apiStatus === 'online' ? 'FastAPI Neural Engine Online' : apiStatus === 'offline' ? 'Backend Offline (Local Cache Active)' : 'Checking Status...'}
+              </span>
+            </div>
+          </div>
+
+          <p className="text-[13px] text-[#c2c6d6]">
+            Configure where the frontend connects for YOLOv8 neural detection, ByteTrack tracking, and ANPR plate recognition.
+            When deployed on Render or cloud hosts, set the custom HTTPS URL of your backend service (e.g. <code className="text-[#adc6ff] bg-[#0d1526] px-1.5 py-0.5 rounded">https://your-service.onrender.com</code>).
+          </p>
+
+          <div className="flex flex-col sm:flex-row gap-3 items-center">
+            <input
+              type="text"
+              value={apiUrl}
+              onChange={(e) => setApiUrl(e.target.value)}
+              placeholder="e.g. https://bordervision.onrender.com or /api"
+              className="flex-1 w-full bg-[#0d1526] border border-[#424754]/40 rounded-lg px-3.5 py-2.5 text-[13px] font-mono text-[#dae3f7] focus:outline-none focus:border-[#4d8eff]/60"
+            />
+            <button
+              type="button"
+              onClick={handleTestApi}
+              disabled={isTestingApi}
+              className="w-full sm:w-auto px-4 py-2.5 bg-[#4d8eff] hover:bg-[#adc6ff] text-[#00285d] font-bold rounded-lg text-[12px] font-mono uppercase tracking-wider transition-colors disabled:opacity-50 shrink-0"
+            >
+              {isTestingApi ? 'Connecting...' : 'Test & Apply'}
+            </button>
+            <button
+              type="button"
+              onClick={handleResetApi}
+              className="w-full sm:w-auto px-3.5 py-2.5 bg-[#222a39] hover:bg-[#2c3544] text-[#c2c6d6] font-bold rounded-lg text-[12px] font-mono uppercase tracking-wider transition-colors shrink-0"
+            >
+              Reset (/api)
+            </button>
+          </div>
+
+          {apiFeedback && (
+            <div className={`text-[12px] font-mono p-3 rounded-lg border ${
+              apiStatus === 'online'
+                ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30'
+                : 'bg-amber-950/40 text-amber-300 border-amber-500/30'
+            }`}>
+              {apiFeedback}
+            </div>
+          )}
+
+          <div className="bg-[#0d1526] p-3.5 rounded-lg border border-[#424754]/20 text-[11px] text-[#8c909f] space-y-1 leading-relaxed">
+            <div><strong className="text-[#c2c6d6]">Tip for Render Free Tier:</strong> Free web services spin down after 15 minutes of inactivity. When accessed again, the first request takes 30-50 seconds to wake up.</div>
+            <div><strong className="text-[#c2c6d6]">Local Persistence:</strong> All watchlist additions and edits are preserved immediately in your browser's persistent storage, so records never disappear even if the backend restarts.</div>
           </div>
         </div>
       </div>

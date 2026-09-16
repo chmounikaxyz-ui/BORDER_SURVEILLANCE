@@ -438,9 +438,11 @@ class DetectionEngine:
                 fh, fw = frame.shape[:2]
                 scale = 1.0
                 infer_frame = frame
-                if fw > 1280:
-                    scale = 1280.0 / fw
-                    infer_frame = cv2.resize(frame, (1280, int(fh * scale)))
+                # Limit inference width to 640px for lightweight, memory-safe CPU/cloud execution
+                target_w = 640
+                if fw > target_w:
+                    scale = target_w / float(fw)
+                    infer_frame = cv2.resize(frame, (target_w, int(fh * scale)))
 
                 # Run tracking with fallback to standard prediction if tracker encounters any issue
                 try:

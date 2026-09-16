@@ -100,25 +100,17 @@ const PersonForm: React.FC<PersonFormProps> = ({ onAdded, onCancel }) => {
     };
 
     try {
-      const result = await Promise.race([
-        addWatchlistPerson({
-          name: trimmedName,
-          alias: alias.trim(),
-          nationality: nationality.trim(),
-          threatLevel,
-          notes: notes.trim(),
-          photoBase64,
-          addedBy: 'Operator',
-        }),
-        new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 4500))
-      ]).catch(() => null);
-
+      const result = await addWatchlistPerson({
+        name: trimmedName,
+        alias: alias.trim(),
+        nationality: nationality.trim(),
+        threatLevel,
+        notes: notes.trim(),
+        photoBase64,
+        addedBy: 'Operator',
+      });
       setLoading(false);
-      if (result && result.id) {
-        onAdded(result);
-      } else {
-        onAdded(fallbackPerson);
-      }
+      onAdded(result || fallbackPerson);
     } catch (err) {
       setLoading(false);
       onAdded(fallbackPerson);
@@ -271,26 +263,18 @@ const VehicleForm: React.FC<VehicleFormProps> = ({ onAdded, onCancel }) => {
     };
 
     try {
-      const result = await Promise.race([
-        addWatchlistVehicle({
-          plateNumber: formattedPlate,
-          make: make.trim(),
-          model: model.trim(),
-          color: color.trim(),
-          threatLevel,
-          notes: notes.trim(),
-          photoBase64,
-          addedBy: 'Operator',
-        }),
-        new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 4500))
-      ]).catch(() => null);
-
+      const result = await addWatchlistVehicle({
+        plateNumber: formattedPlate,
+        make: make.trim(),
+        model: model.trim(),
+        color: color.trim(),
+        threatLevel,
+        notes: notes.trim(),
+        photoBase64,
+        addedBy: 'Operator',
+      });
       setLoading(false);
-      if (result && result.id) {
-        onAdded(result);
-      } else {
-        onAdded(fallbackVehicle);
-      }
+      onAdded(result || fallbackVehicle);
     } catch (err) {
       setLoading(false);
       onAdded(fallbackVehicle);

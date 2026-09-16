@@ -30,6 +30,16 @@ export function getApiBaseUrl(): string {
   return '/api';
 }
 
+export function setCustomApiUrl(url: string): void {
+  try {
+    if (!url || !url.trim()) {
+      localStorage.removeItem('bordervision_api_url');
+    } else {
+      localStorage.setItem('bordervision_api_url', url.trim().replace(/\/$/, ''));
+    }
+  } catch {}
+}
+
 const BASE = '/api';
 const ALT_BASE = 'http://localhost:8000/api';
 
@@ -449,65 +459,180 @@ export async function getPersonPhotos(personId: string): Promise<PersonPhotosRes
   return apiFetch<PersonPhotosResponse>(`/watchlist/persons/${personId}/photos`);
 }
 
-export async function getWatchlistPersons(): Promise<WatchlistPerson[] | null> {
-  return apiFetch<WatchlistPerson[]>('/watchlist/persons');
+// ─── Watchlist Local Storage & Sync ──────────────────────────────────────────
+const LOCAL_STORAGE_PERSONS_KEY = 'bordervision_watchlist_persons';
+const LOCAL_STORAGE_VEHICLES_KEY = 'bordervision_watchlist_vehicles';
+
+export function getLocalWatchlistPersons(): WatchlistPerson[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_PERSONS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalWatchlistPersons(persons: WatchlistPerson[]): void {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_PERSONS_KEY, JSON.stringify(persons));
+  } catch {}
+}
+
+export function getLocalWatchlistVehicles(): WatchlistVehicle[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_VEHICLES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalWatchlistVehicles(vehicles: WatchlistVehicle[]): void {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_VEHICLES_KEY, JSON.stringify(vehicles));
+  } catch {}
+}
+
+export async function getWatchlistPersons(): Promise<WatchlistPerson[]> {
+  const local = getLocalWatchlistPersons();
+  try {
+    const remote = await apiFetch<WatchlistPerson[]>('/watchlist/persons', { timeoutMs: 12000 });
+    if (Array.isArray(remote)) {
+      const map = new Map<string, WatchlistPerson>();
+      local.forEach(p => map.set(p.id, p));
+      remote.forEach(p => map.set(p.id, p));
+      const merged = Array.from(map.values());
+      saveLocalWatchlistPersons(merged);
+      return merged;
+    }
+  } catch (err) {
+    console.warn('[API] Failed to fetch remote persons, returning local cache:', err);
+  }
+  return local;
 }
 
 export async function addWatchlistPerson(
   data: Omit<WatchlistPerson, 'id' | 'createdAt'>,
-): Promise<WatchlistPerson | null> {
-  return apiFetch<WatchlistPerson>('/watchlist/persons', {
-    method: 'POST',
-    body: JSON.stringify({
-      name:         data.name,
-      alias:        data.alias,
-      nationality:  data.nationality,
-      threat_level: data.threatLevel,
-      notes:        data.notes,
-      photo_base64: data.photoBase64,
-      added_by:     data.addedBy,
-    }),
-  });
+): Promise<WatchlistPerson> {
+  const localPerson: WatchlistPerson = {
+    id: `wp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    name: data.name,
+    alias: data.alias,
+    nationality: data.nationality,
+    threatLevel: data.threatLevel,
+    notes: data.notes,
+    photoBase64: data.photoBase64,
+    createdAt: new Date().toISOString(),
+    addedBy: data.addedBy || 'Operator',
+  };
+
+  // 1. Immediately store in localStorage so records NEVER disappear on page refresh
+  const local = getLocalWatchlistPersons();
+  saveLocalWatchlistPersons([localPerson, ...local.filter(p => p.id !== localPerson.id)]);
+
+  // 2. Sync to backend database
+  try {
+    const remote = await apiFetch<WatchlistPerson>('/watchlist/persons', {
+      method: 'POST',
+      timeoutMs: 25000,
+      body: JSON.stringify({
+        name:         data.name,
+        alias:        data.alias,
+        nationality:  data.nationality,
+        threat_level: data.threatLevel,
+        notes:        data.notes,
+        photo_base64: data.photoBase64,
+        added_by:     data.addedBy,
+      }),
+    });
+    if (remote && remote.id) {
+      const updated = getLocalWatchlistPersons().map(p => p.id === localPerson.id ? remote : p);
+      saveLocalWatchlistPersons(updated);
+      return remote;
+    }
+  } catch (err) {
+    console.warn('[API] Could not sync person to backend (retained in localStorage):', err);
+  }
+  return localPerson;
 }
 
 export async function deleteWatchlistPerson(id: string): Promise<boolean> {
-  try {
-    const res = await fetch(`/api/watchlist/persons/${id}`, { method: 'DELETE' });
-    return res.ok || res.status === 204;
-  } catch {
-    return false;
-  }
+  const local = getLocalWatchlistPersons();
+  saveLocalWatchlistPersons(local.filter(p => p.id !== id));
+  const res = await apiFetch(`/watchlist/persons/${id}`, { method: 'DELETE', timeoutMs: 10000 });
+  return res !== null;
 }
 
-export async function getWatchlistVehicles(): Promise<WatchlistVehicle[] | null> {
-  return apiFetch<WatchlistVehicle[]>('/watchlist/vehicles');
+export async function getWatchlistVehicles(): Promise<WatchlistVehicle[]> {
+  const local = getLocalWatchlistVehicles();
+  try {
+    const remote = await apiFetch<WatchlistVehicle[]>('/watchlist/vehicles', { timeoutMs: 12000 });
+    if (Array.isArray(remote)) {
+      const map = new Map<string, WatchlistVehicle>();
+      local.forEach(v => map.set(v.id, v));
+      remote.forEach(v => map.set(v.id, v));
+      const merged = Array.from(map.values());
+      saveLocalWatchlistVehicles(merged);
+      return merged;
+    }
+  } catch (err) {
+    console.warn('[API] Failed to fetch remote vehicles, returning local cache:', err);
+  }
+  return local;
 }
 
 export async function addWatchlistVehicle(
   data: Omit<WatchlistVehicle, 'id' | 'createdAt'>,
-): Promise<WatchlistVehicle | null> {
-  return apiFetch<WatchlistVehicle>('/watchlist/vehicles', {
-    method: 'POST',
-    body: JSON.stringify({
-      plate_number: data.plateNumber,
-      make:         data.make,
-      model:        data.model,
-      color:        data.color,
-      threat_level: data.threatLevel,
-      notes:        data.notes,
-      photo_base64: data.photoBase64,
-      added_by:     data.addedBy,
-    }),
-  });
+): Promise<WatchlistVehicle> {
+  const localVehicle: WatchlistVehicle = {
+    id: `wv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    plateNumber: data.plateNumber,
+    make: data.make,
+    model: data.model,
+    color: data.color,
+    threatLevel: data.threatLevel,
+    notes: data.notes,
+    photoBase64: data.photoBase64,
+    createdAt: new Date().toISOString(),
+    addedBy: data.addedBy || 'Operator',
+  };
+
+  // 1. Immediately store in localStorage so records NEVER disappear on page refresh
+  const local = getLocalWatchlistVehicles();
+  saveLocalWatchlistVehicles([localVehicle, ...local.filter(v => v.id !== localVehicle.id)]);
+
+  // 2. Sync to backend database
+  try {
+    const remote = await apiFetch<WatchlistVehicle>('/watchlist/vehicles', {
+      method: 'POST',
+      timeoutMs: 25000,
+      body: JSON.stringify({
+        plate_number: data.plateNumber,
+        make:         data.make,
+        model:        data.model,
+        color:        data.color,
+        threat_level: data.threatLevel,
+        notes:        data.notes,
+        photo_base64: data.photoBase64,
+        added_by:     data.addedBy,
+      }),
+    });
+    if (remote && remote.id) {
+      const updated = getLocalWatchlistVehicles().map(v => v.id === localVehicle.id ? remote : v);
+      saveLocalWatchlistVehicles(updated);
+      return remote;
+    }
+  } catch (err) {
+    console.warn('[API] Could not sync vehicle to backend (retained in localStorage):', err);
+  }
+  return localVehicle;
 }
 
 export async function deleteWatchlistVehicle(id: string): Promise<boolean> {
-  try {
-    const res = await fetch(`/api/watchlist/vehicles/${id}`, { method: 'DELETE' });
-    return res.ok || res.status === 204;
-  } catch {
-    return false;
-  }
+  const local = getLocalWatchlistVehicles();
+  saveLocalWatchlistVehicles(local.filter(v => v.id !== id));
+  const res = await apiFetch(`/watchlist/vehicles/${id}`, { method: 'DELETE', timeoutMs: 10000 });
+  return res !== null;
 }
 
 export async function getWatchlistMatches(): Promise<any[] | null> {

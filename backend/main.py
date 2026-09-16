@@ -26,8 +26,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 
 from data import CAMERAS_DATA
-from database import get_conn, init_db
-from detector import DetectionEngine
+from detector import DetectionEngine, _ensure_lap_solver
+_ensure_lap_solver()
 from models import (AlertStatusUpdate, VideoJobRequest,
                     WatchlistPersonCreate, WatchlistVehicleCreate,
                     AlertFeedback, TamperInject, CameraCreate, FrameDetectRequest,
@@ -136,6 +136,25 @@ async def lifespan(app: FastAPI):
                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 ("wv-lc71pzs", "LC71 PZS", "Kia", "Niro", "Dark", "CRITICAL",
                  "Suspect vehicle identified in highway surveillance footage", "", now_str, "Operator")
+            )
+
+        # Ensure default watchlist persons exist if table is empty
+        p_count = conn.execute("SELECT COUNT(*) FROM watchlist_persons").fetchone()[0]
+        if p_count == 0:
+            now_str = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                """INSERT INTO watchlist_persons
+                   (id, name, alias, nationality, threat_level, notes, photo_base64, created_at, added_by)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                ("wp-viktor-vance", "Viktor Vance", "The Architect", "Eastern European", "CRITICAL",
+                 "Interpol Red Notice — High-priority border perimeter intrusion suspect", "", now_str, "Operator")
+            )
+            conn.execute(
+                """INSERT INTO watchlist_persons
+                   (id, name, alias, nationality, threat_level, notes, photo_base64, created_at, added_by)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                ("wp-tariq-mansoor", "Tariq Al-Mansoor", "Ghost Operator", "Regional", "HIGH",
+                 "Cross-border electronic surveillance evasion suspect", "", now_str, "Operator")
             )
 
         conn.commit()
@@ -261,8 +280,8 @@ def process_sample_video(background_tasks: BackgroundTasks):
             status_code=404,
             detail="No sample video found on server. Please upload an MP4 video or check backend/samples."
         )
-    # Prefer the 4k highway video if available
-    sample = next((p for p in mp4s if "14266560" in p.name), mp4s[0])
+    # Prefer lightweight CCTV sample video for fast, memory-safe execution on cloud/Render
+    sample = next((p for p in mp4s if "cctv_surveillance" in p.name), mp4s[0])
     sample_path = str(sample)
 
     job_id = f"job-{uuid.uuid4().hex[:8]}"
