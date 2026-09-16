@@ -443,15 +443,8 @@ async def video_live_stream(request: Request):
 @app.get("/api/alerts")
 def get_alerts():
     conn = get_conn()
-    try:
-        conn.execute("DELETE FROM alerts WHERE title LIKE 'UNAUTHORIZED%'")
-        conn.execute("UPDATE alerts SET speed_heading = '45 km/h • 045°' WHERE (speed_heading IS NULL OR speed_heading = '' OR speed_heading = 'Unknown') AND (category = 'VEHICLE' OR object_type IN ('car', 'truck', 'bus') OR title LIKE '%Vehicle%' OR title LIKE '%Plate%' OR title LIKE '%LC71%')")
-        conn.execute("UPDATE alerts SET speed_heading = '9 km/h • 045°' WHERE (speed_heading IS NULL OR speed_heading = '' OR speed_heading = 'Unknown')")
-        conn.commit()
-    except Exception:
-        pass
     rows = conn.execute(
-        "SELECT * FROM alerts WHERE title NOT LIKE 'UNAUTHORIZED%' ORDER BY created_at DESC"
+        "SELECT * FROM alerts WHERE title NOT LIKE 'UNAUTHORIZED%' ORDER BY created_at DESC LIMIT 50"
     ).fetchall()
     conn.close()
 

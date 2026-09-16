@@ -368,9 +368,6 @@ export async function uploadVideo(
   file: File,
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<{ job_id: string; filename: string } | null> {
-  const formData = new FormData();
-  formData.append('file', file);
-
   const base = getApiBaseUrl();
   const urls = [
     `${base}/video/upload`,
@@ -381,34 +378,45 @@ export async function uploadVideo(
   for (const url of urls) {
     try {
       console.log(`[Upload] Trying ${url}...`);
-      
-      // Signal progress at start
-      onProgress?.({ loaded: 0, total: file.size, percent: 0 });
+      const result = await new Promise<{ job_id: string; filename: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.timeout = 120000;
 
-      const response = await fetch(url, {
-        method: 'POST',
-        body: formData,
-        // Do NOT set Content-Type — browser sets multipart boundary automatically
+        if (xhr.upload && onProgress) {
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              const percent = Math.round((event.loaded / event.total) * 100);
+              onProgress({ loaded: event.loaded, total: event.total, percent });
+            }
+          };
+        }
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const data = JSON.parse(xhr.responseText);
+              onProgress?.({ loaded: file.size, total: file.size, percent: 100 });
+              resolve(data);
+            } catch (e) {
+              reject(new Error('Invalid JSON response from server'));
+            }
+          } else {
+            reject(new Error(`Server returned status ${xhr.status}: ${xhr.responseText}`));
+          }
+        };
+
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.ontimeout = () => reject(new Error('Upload timed out'));
+
+        const formData = new FormData();
+        formData.append('file', file);
+        xhr.send(formData);
       });
 
-      console.log(`[Upload] ${url} responded with status ${response.status}`);
-      
-      // Signal progress complete
-      onProgress?.({ loaded: file.size, total: file.size, percent: 100 });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('[Upload] Success:', data);
-        return data;
-      } else {
-        const errorText = await response.text();
-        console.warn(`[Upload] ${url} returned ${response.status}: ${errorText}`);
-        // Try next URL
-        continue;
-      }
+      return result;
     } catch (err: any) {
       console.warn(`[Upload] ${url} failed:`, err?.message || err);
-      // Try next URL
       continue;
     }
   }

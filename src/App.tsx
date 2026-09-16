@@ -33,6 +33,7 @@ export const App: React.FC = () => {
   // Live API state
   const [apiConnected, setApiConnected] = useState(false);
   const prevAlertCountRef = useRef(0);
+  const isPollingRef = useRef(false);
 
   // Modals state
   const [isCertModalOpen, setIsCertModalOpen] = useState(false);
@@ -209,34 +210,42 @@ export const App: React.FC = () => {
     showToast('Biometric Match Dismissed', `Candidate ${id} rejected as low facial landmark match.`, 'info');
   };
 
-  // ── Live API polling (1.5-second interval) ──────────────────────────────────
+  // ── Live API polling (2.5-second interval, concurrency guarded) ─────────────
   const pollApi = useCallback(async () => {
-    const [healthy, liveAlerts, liveCameras] = await Promise.all([
-      checkHealth(),
-      getAlerts(),
-      getCameras(),
-    ]);
+    if (isPollingRef.current) return;
+    isPollingRef.current = true;
+    try {
+      const [healthy, liveAlerts, liveCameras] = await Promise.all([
+        checkHealth(),
+        getAlerts(),
+        getCameras(),
+      ]);
 
-    const isConnected = healthy || Array.isArray(liveAlerts);
-    setApiConnected(isConnected);
+      const isConnected = healthy || Array.isArray(liveAlerts);
+      setApiConnected(isConnected);
 
-    if (Array.isArray(liveAlerts)) {
-      setAlerts(liveAlerts as TacticalAlert[]);
-      const newCount = liveAlerts.filter(a => a.status === 'PENDING VERIFICATION').length;
-      if (newCount > prevAlertCountRef.current) {
-        playTacticalChime('alert');
+      if (Array.isArray(liveAlerts)) {
+        setAlerts(liveAlerts as TacticalAlert[]);
+        const newCount = liveAlerts.filter(a => a.status === 'PENDING VERIFICATION').length;
+        if (newCount > prevAlertCountRef.current) {
+          playTacticalChime('alert');
+        }
+        prevAlertCountRef.current = newCount;
       }
-      prevAlertCountRef.current = newCount;
-    }
 
-    if (Array.isArray(liveCameras) && liveCameras.length > 0) {
-      setCameras(liveCameras as CameraNode[]);
+      if (Array.isArray(liveCameras) && liveCameras.length > 0) {
+        setCameras(liveCameras as CameraNode[]);
+      }
+    } catch {
+      // Network retry handled by next interval
+    } finally {
+      isPollingRef.current = false;
     }
   }, [soundEnabled]);
 
   useEffect(() => {
     pollApi();                          // immediate first check
-    const id = setInterval(pollApi, 1000); // 1.0s interval for snappy alert sync
+    const id = setInterval(pollApi, 2500); // 2.5s interval ensures light network utilization
     return () => clearInterval(id);
   }, [pollApi]);
 
