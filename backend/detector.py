@@ -32,21 +32,17 @@ def _ensure_lap_solver():
     except (ImportError, AssertionError, AttributeError):
         pass
 
-    try:
-        import lapx as lap
-        sys.modules["lap"] = lap
-        return
-    except ImportError:
-        pass
+    # lapx is the pip wheel distribution that installs the 'lap' module.
+    # If neither 'lap' nor 'lapx' is installed, fall back to the scipy shim.
 
-    # High-reliability fallback shim using scipy.optimize.linear_sum_assignment
+    # High-reliability fallback shim using ultralytics pure-NumPy linear_sum_assignment
     class _LapShim:
         __version__ = "0.5.12"
 
         @staticmethod
         def lapjv(cost_matrix, extend_cost=True, cost_limit=None):
             try:
-                from scipy.optimize import linear_sum_assignment
+                from ultralytics.utils.ops import linear_sum_assignment
                 row_ind, col_ind = linear_sum_assignment(cost_matrix)
             except Exception:
                 row_ind, col_ind = [], []
