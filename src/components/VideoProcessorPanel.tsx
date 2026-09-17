@@ -343,9 +343,6 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
           <h2 className="text-[15px] font-bold text-[#dae3f7]">
             Video Analysis Engine
           </h2>
-          <p className="text-[11px] text-[#c2c6d6] font-mono">
-            YOLOv8n + ByteTrack • Suspicious Behaviour & Threat Intrusion Detection
-          </p>
         </div>
         {isRunning && (
           <span className="flex items-center gap-1.5 text-[#4d8eff] text-[11px] font-mono font-bold">
