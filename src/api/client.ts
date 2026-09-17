@@ -59,22 +59,22 @@ export function resolveMediaUrl(url?: string | null): string {
 }
 
 const BASE = '/api';
-const ALT_BASE = 'http://localhost:8000/api';
+const ALT_BASE = 'http://127.0.0.1:8000/api';
+let _ACTIVE_API_BASE: string | null = null;
 
 export function getCandidateApiBases(): string[] {
   const base = getApiBaseUrl();
-  const bases = [base];
-  if (base !== '/api' && !bases.includes('/api')) {
-    bases.push('/api');
+  const list: string[] = [];
+  if (_ACTIVE_API_BASE) {
+    list.push(_ACTIVE_API_BASE);
   }
-  if (!bases.includes('http://localhost:8000/api')) {
-    bases.push('http://localhost:8000/api');
-  }
+  if (!list.includes(base)) list.push(base);
+  if (base !== '/api' && !list.includes('/api')) list.push('/api');
+  if (!list.includes('http://127.0.0.1:8000/api')) list.push('http://127.0.0.1:8000/api');
+  if (!list.includes('http://localhost:8000/api')) list.push('http://localhost:8000/api');
   const renderProd = 'https://border-surveillance-eol7.onrender.com/api';
-  if (!bases.includes(renderProd)) {
-    bases.push(renderProd);
-  }
-  return bases;
+  if (!list.includes(renderProd)) list.push(renderProd);
+  return list;
 }
 
 export interface ApiFetchOptions extends RequestInit {
@@ -87,15 +87,12 @@ async function apiFetch<T>(
   path: string,
   options?: ApiFetchOptions,
 ): Promise<T | null> {
-  const timeoutMs = options?.timeoutMs ?? 15000;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
   const candidateBases = getCandidateApiBases();
-
-  const { timeoutMs: _t, ...fetchOptions } = options || {};
+  const { timeoutMs = 6000, ...fetchOptions } = options || {};
 
   for (const b of candidateBases) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(`${b}${path}`, {
         headers: { 'Content-Type': 'application/json' },
@@ -104,27 +101,27 @@ async function apiFetch<T>(
       });
       clearTimeout(timeoutId);
       if (!res.ok) {
-        console.warn(`[API] ${b}${path} → ${res.status}`);
         continue;
       }
+      _ACTIVE_API_BASE = b; // Remember the fast working base
       if (res.status === 204 || res.headers.get('content-length') === '0') {
         return ({} as T);
       }
       const text = await res.text();
       return text ? (JSON.parse(text) as T) : ({} as T);
     } catch {
+      clearTimeout(timeoutId);
       // try next candidate base
     }
   }
 
-  clearTimeout(timeoutId);
   return null;
 }
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 export async function checkHealth(): Promise<boolean> {
-  const data = await apiFetch<{ status: string }>('/health');
+  const data = await apiFetch<{ status: string }>('/health', { timeoutMs: 3000 });
   return data?.status === 'online';
 }
 
@@ -396,7 +393,7 @@ export interface UploadProgress {
 export async function uploadVideo(
   file: File,
   onProgress?: (progress: UploadProgress) => void,
-): Promise<{ job_id?: string; filename?: string; error?: string } | null> {
+): Promise<{ job_id?: string; filename?: string; video_url?: string; error?: string } | null> {
   const bases = getCandidateApiBases();
   const urls = bases.map((b) => `${b}/video/upload`).filter((u, i, arr) => arr.indexOf(u) === i);
 
@@ -405,10 +402,10 @@ export async function uploadVideo(
   for (const url of urls) {
     try {
       console.log(`[Upload] Trying ${url}...`);
-      const result = await new Promise<{ job_id: string; filename: string }>((resolve, reject) => {
+      const result = await new Promise<{ job_id: string; filename: string; video_url?: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', url);
-        xhr.timeout = 180000; // 3 min timeout
+        xhr.timeout = 45000; // 45 sec timeout per candidate
 
         if (xhr.upload && onProgress) {
           xhr.upload.onprogress = (event) => {
@@ -424,6 +421,8 @@ export async function uploadVideo(
             try {
               const data = JSON.parse(xhr.responseText);
               onProgress?.({ loaded: file.size, total: file.size, percent: 100 });
+              const originBase = url.replace(/\/video\/upload$/, '');
+              _ACTIVE_API_BASE = originBase;
               resolve(data);
             } catch (e) {
               reject(new Error('Invalid JSON response from server'));
@@ -439,7 +438,7 @@ export async function uploadVideo(
         };
 
         xhr.onerror = () => reject(new Error(`Network error connecting to ${url}`));
-        xhr.ontimeout = () => reject(new Error('Upload timed out'));
+        xhr.ontimeout = () => reject(new Error(`Upload timed out connecting to ${url}`));
 
         const formData = new FormData();
         formData.append('file', file);
