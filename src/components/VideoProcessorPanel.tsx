@@ -223,6 +223,19 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       return;
     }
 
+    // Fast-path: If user selected the bundled surveillance footage (14266560 or highway sample),
+    // launch detection immediately using the pre-loaded server video to avoid slow 31MB upload delays.
+    const isSampleFootage =
+      selectedFile.name.includes('14266560') ||
+      selectedFile.name.toLowerCase().includes('highway') ||
+      selectedFile.name.toLowerCase().includes('cctv_surveillance');
+
+    if (isSampleFootage) {
+      console.log('[VideoProcessor] Bundled sample video detected. Launching instant analysis directly...');
+      await handleSampleStart();
+      return;
+    }
+
     if (selectedFile.size > 150 * 1024 * 1024) {
       setError(`File is too large (${(selectedFile.size / (1024 * 1024)).toFixed(1)}MB). For cloud processing, please upload a video under 150MB or use the Preset Highway Surveillance sample.`);
       return;
@@ -313,11 +326,12 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       return;
     }
 
-    if (result.filename) {
+    if (result.filename && !videoPreviewUrl) {
       const apiBase = getApiBaseUrl();
       const origin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : '';
       setVideoPreviewUrl(`${origin}/uploads/${result.filename}`);
     }
+    setDisplayMode('player');
 
     setJob({
       job_id: result.job_id,
@@ -572,8 +586,13 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[14px] font-bold text-[#dae3f7] truncate">{selectedFile.name}</p>
-                    <p className="text-[11px] font-mono text-[#c2c6d6] mt-0.5">
-                      {formatFileSize(selectedFile.size)} • {selectedFile.type || 'video'}
+                    <p className="text-[11px] font-mono text-[#c2c6d6] mt-0.5 flex items-center gap-2 flex-wrap">
+                      <span>{formatFileSize(selectedFile.size)} • {selectedFile.type || 'video'}</span>
+                      {(selectedFile.name.includes('14266560') || selectedFile.name.toLowerCase().includes('highway') || selectedFile.name.toLowerCase().includes('cctv_surveillance')) && (
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
+                          PRESET FOOTAGE (INSTANT ZERO-UPLOAD)
+                        </span>
+                      )}
                     </p>
                   </div>
                   <button
@@ -637,7 +656,9 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                 className="w-full py-3 bg-[#4d8eff] hover:bg-[#adc6ff] text-[#00285d] font-bold rounded-lg text-[12px] uppercase tracking-wider transition-colors shadow-md flex items-center justify-center gap-2"
               >
                 <span className="material-symbols-outlined text-[18px]">play_arrow</span>
-                Upload & Start Detection
+                {selectedFile.name.includes('14266560') || selectedFile.name.toLowerCase().includes('highway') || selectedFile.name.toLowerCase().includes('cctv_surveillance')
+                  ? 'Start Detection (Instant Preset)'
+                  : 'Upload & Start Detection'}
               </button>
             )}
 

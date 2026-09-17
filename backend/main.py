@@ -301,6 +301,11 @@ app.mount(
     StaticFiles(directory=str(UPLOADS_DIR), html=False),
     name="uploads",
 )
+app.mount(
+    "/samples",
+    StaticFiles(directory=str(SAMPLES_DIR), html=False),
+    name="samples",
+)
 
 engine = DetectionEngine()
 _current_job_id: Optional[str] = None
@@ -372,11 +377,20 @@ def process_sample_video(background_tasks: BackgroundTasks):
 
     _current_job_id = job_id
     background_tasks.add_task(engine.process_video, sample_path, job_id)
+    upload_target = UPLOADS_DIR / sample.name
+    if not upload_target.exists() and sample.exists():
+        try:
+            import shutil
+            shutil.copy(sample, upload_target)
+        except Exception:
+            pass
+
     return {
         "job_id": job_id,
         "status": "queued",
         "video_path": sample_path,
         "filename": sample.name,
+        "video_url": f"/uploads/{sample.name}",
         "message": f"Detection started on {sample.name}"
     }
 

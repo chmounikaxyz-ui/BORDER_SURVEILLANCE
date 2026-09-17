@@ -63,6 +63,7 @@ const ALT_BASE = 'http://127.0.0.1:8000/api';
 let _ACTIVE_API_BASE: string | null = null;
 
 export function getCandidateApiBases(): string[] {
+  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
   const base = getApiBaseUrl();
   const list: string[] = [];
   if (_ACTIVE_API_BASE) {
@@ -70,8 +71,11 @@ export function getCandidateApiBases(): string[] {
   }
   if (!list.includes(base)) list.push(base);
   if (base !== '/api' && !list.includes('/api')) list.push('/api');
-  if (!list.includes('http://127.0.0.1:8000/api')) list.push('http://127.0.0.1:8000/api');
-  if (!list.includes('http://localhost:8000/api')) list.push('http://localhost:8000/api');
+  // Avoid mixed content blocks on HTTPS: modern browsers reject http:// requests from https:// pages
+  if (!isHttps) {
+    if (!list.includes('http://127.0.0.1:8000/api')) list.push('http://127.0.0.1:8000/api');
+    if (!list.includes('http://localhost:8000/api')) list.push('http://localhost:8000/api');
+  }
   const renderProd = 'https://border-surveillance-eol7.onrender.com/api';
   if (!list.includes(renderProd)) list.push(renderProd);
   return list;
@@ -395,66 +399,61 @@ export async function uploadVideo(
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<{ job_id?: string; filename?: string; video_url?: string; error?: string } | null> {
   const bases = getCandidateApiBases();
-  const urls = bases.map((b) => `${b}/video/upload`).filter((u, i, arr) => arr.indexOf(u) === i);
+  // Target the best active base directly without loop resets
+  const targetBase = _ACTIVE_API_BASE || bases[0] || '/api';
+  const url = `${targetBase}/video/upload`;
 
-  let lastError = '';
+  console.log(`[Upload] Uploading ${file.name} (${file.size} bytes) to ${url}...`);
 
-  for (const url of urls) {
-    try {
-      console.log(`[Upload] Trying ${url}...`);
-      const result = await new Promise<{ job_id: string; filename: string; video_url?: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', url);
-        xhr.timeout = 45000; // 45 sec timeout per candidate
+  try {
+    const result = await new Promise<{ job_id: string; filename: string; video_url?: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      // Generous 15 minute timeout (900000ms) to ensure large video files transfer without being aborted
+      xhr.timeout = 900000;
 
-        if (xhr.upload && onProgress) {
-          xhr.upload.onprogress = (event) => {
-            if (event.lengthComputable) {
-              const percent = Math.round((event.loaded / event.total) * 100);
-              onProgress({ loaded: event.loaded, total: event.total, percent });
-            }
-          };
-        }
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-              const data = JSON.parse(xhr.responseText);
-              onProgress?.({ loaded: file.size, total: file.size, percent: 100 });
-              const originBase = url.replace(/\/video\/upload$/, '');
-              _ACTIVE_API_BASE = originBase;
-              resolve(data);
-            } catch (e) {
-              reject(new Error('Invalid JSON response from server'));
-            }
-          } else {
-            let errMsg = `Server returned status ${xhr.status}`;
-            try {
-              const parsed = JSON.parse(xhr.responseText);
-              errMsg = parsed.detail || parsed.message || errMsg;
-            } catch {}
-            reject(new Error(errMsg));
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            const percent = Math.min(99, Math.round((event.loaded / event.total) * 100));
+            onProgress({ loaded: event.loaded, total: event.total, percent });
           }
         };
+      }
 
-        xhr.onerror = () => reject(new Error(`Network error connecting to ${url}`));
-        xhr.ontimeout = () => reject(new Error(`Upload timed out connecting to ${url}`));
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            onProgress?.({ loaded: file.size, total: file.size, percent: 100 });
+            _ACTIVE_API_BASE = targetBase;
+            resolve(data);
+          } catch (e) {
+            reject(new Error('Invalid JSON response received from server.'));
+          }
+        } else {
+          let errMsg = `Server returned status ${xhr.status}`;
+          try {
+            const parsed = JSON.parse(xhr.responseText);
+            errMsg = parsed.detail || parsed.message || errMsg;
+          } catch {}
+          reject(new Error(errMsg));
+        }
+      };
 
-        const formData = new FormData();
-        formData.append('file', file);
-        xhr.send(formData);
-      });
+      xhr.onerror = () => reject(new Error(`Network error connecting to ${url}. Please check your internet connection.`));
+      xhr.ontimeout = () => reject(new Error(`Upload timed out. Video file is large or connection speed is low.`));
 
-      return result;
-    } catch (err: any) {
-      console.warn(`[Upload] ${url} failed:`, err?.message || err);
-      lastError = err?.message || 'Network error';
-      continue;
-    }
+      const formData = new FormData();
+      formData.append('file', file);
+      xhr.send(formData);
+    });
+
+    return result;
+  } catch (err: any) {
+    console.error('[Upload] Upload failed:', err);
+    return { error: err?.message || 'Upload failed. Please check connection and try again.' };
   }
-
-  console.error('[Upload] All upload URLs failed:', lastError);
-  return { error: lastError || 'Upload failed. Please check network connection or verify file format.' };
 }
 
 // ─── System nodes ─────────────────────────────────────────────────────────────
