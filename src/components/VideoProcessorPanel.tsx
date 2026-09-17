@@ -110,18 +110,18 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     }
   }, [job]);
 
-  // ── High-frequency tracking loop ONLY when video analysis is running or complete ──
+  // ── Frame detection overlay ONLY when job is complete in player mode ─────────
   useEffect(() => {
-    if (!videoPreviewUrl || !job || (job.status !== 'running' && job.status !== 'complete')) {
+    if (!videoPreviewUrl || !job || job.status !== 'complete' || streamMode !== 'player') {
       setLiveDetections([]);
       return;
     }
 
-    const interval = setInterval(runFrameDetection, 250);
+    const interval = setInterval(runFrameDetection, 300);
     return () => clearInterval(interval);
-  }, [videoPreviewUrl, job?.status, runFrameDetection]);
+  }, [videoPreviewUrl, job?.status, streamMode, runFrameDetection]);
 
-  // ── Poll job status while running ─────────────────────────────────────────
+  // ── Poll job status while running (fast 500ms updates) ──────────────────────
   useEffect(() => {
     const shouldPoll = job?.status === 'queued' || job?.status === 'running';
     if (shouldPoll && !pollRef.current) {
@@ -144,7 +144,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
             }
           }
         }
-      }, 1200);
+      }, 500);
     }
     return () => {
       if (!shouldPoll && pollRef.current) {

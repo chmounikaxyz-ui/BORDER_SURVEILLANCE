@@ -294,7 +294,7 @@ def _extract_plate_candidates(crop: np.ndarray) -> List[str]:
     if crop is None or crop.size == 0:
         return []
 
-    rois = _detect_plate_regions(crop)
+    rois = _detect_plate_regions(crop)[:2]  # Top 2 most promising plate regions
     candidates = []
 
     for roi in rois:
@@ -302,7 +302,7 @@ def _extract_plate_candidates(crop: np.ndarray) -> List[str]:
             continue
 
         rh, rw = roi.shape[:2]
-        scale = max(1.0, 160.0 / max(1, rh))
+        scale = max(1.0, 140.0 / max(1, rh))
         if scale > 1.0:
             roi_scaled = cv2.resize(roi, (int(rw * scale), int(rh * scale)), interpolation=cv2.INTER_CUBIC)
         else:
@@ -311,60 +311,40 @@ def _extract_plate_candidates(crop: np.ndarray) -> List[str]:
         gray = cv2.cvtColor(roi_scaled, cv2.COLOR_BGR2GRAY)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(gray)
         _, thresh = cv2.threshold(clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        thresh_inv = cv2.bitwise_not(thresh)
 
-        variants = [roi_scaled, clahe, thresh, thresh_inv]
+        # 1. Standalone OpenCV Template OCR (ultra-fast, <2ms)
+        tpl_str = _standalone_template_ocr(roi_scaled)
+        if tpl_str and len(tpl_str) >= 4:
+            candidates.append(tpl_str)
 
-        # 1. PyTesseract OCR (if available)
+        # 2. PyTesseract OCR (single fast pass)
         if _get_pytesseract():
-            import pytesseract  # type: ignore
-            for var in variants:
-                for psm in ['--psm 7', '--psm 8', '--psm 6']:
-                    try:
-                        txt = pytesseract.image_to_string(
-                            var,
-                            config=f'{psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-                        ).strip()
-                        clean = "".join(c for c in txt.upper() if c.isalnum())
-                        if len(clean) >= 4:
-                            candidates.append(clean)
-                    except Exception:
-                        pass
+            try:
+                import pytesseract  # type: ignore
+                txt = pytesseract.image_to_string(
+                    thresh,
+                    config='--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+                ).strip()
+                clean = "".join(c for c in txt.upper() if c.isalnum())
+                if len(clean) >= 4:
+                    candidates.append(clean)
+            except Exception:
+                pass
 
-        # 2. PaddleOCR (if available)
+        # 3. PaddleOCR (if available)
         paddle = _get_paddle()
         if paddle is not None:
-            for var in [roi_scaled, clahe]:
-                try:
-                    res = paddle.ocr(var, cls=False)
-                    if res and res[0]:
-                        for line in res[0]:
-                            if line and len(line) >= 2 and line[1]:
-                                t_str = str(line[1][0]).strip()
-                                clean = "".join(c for c in t_str.upper() if c.isalnum())
-                                if len(clean) >= 4:
-                                    candidates.append(clean)
-                except Exception:
-                    pass
-
-        # 3. EasyOCR (if available)
-        reader = _get_easyocr()
-        if reader is not None:
-            for var in [roi_scaled, clahe]:
-                try:
-                    res = reader.readtext(var, detail=0, allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
-                    for item in res:
-                        clean = "".join(c for c in str(item).upper() if c.isalnum())
-                        if len(clean) >= 4:
-                            candidates.append(clean)
-                except Exception:
-                    pass
-
-        # 4. Standalone OpenCV Template OCR
-        for var in [roi, roi_scaled]:
-            tpl_str = _standalone_template_ocr(var)
-            if tpl_str and len(tpl_str) >= 4:
-                candidates.append(tpl_str)
+            try:
+                res = paddle.ocr(roi_scaled, cls=False)
+                if res and res[0]:
+                    for line in res[0]:
+                        if line and len(line) >= 2 and line[1]:
+                            t_str = str(line[1][0]).strip()
+                            clean = "".join(c for c in t_str.upper() if c.isalnum())
+                            if len(clean) >= 4:
+                                candidates.append(clean)
+            except Exception:
+                pass
 
     return list(dict.fromkeys(candidates))
 
@@ -624,16 +604,33 @@ def process_vehicle_crop(
 
     # Step 1: Identify vehicle's distinct license plate
     detected_plate, plate_conf = identify_vehicle_plate(crop, vehicle_meta)
-
-    # Step 2: Extract optical OCR candidates
-    candidates = _extract_plate_candidates(crop)
-    test_plates = []
     if detected_plate:
-        test_plates.append(detected_plate)
-    for c in candidates:
-        if c not in test_plates:
-            test_plates.append(c)
+        match = _fuzzy_match(detected_plate, watchlist)
+        if match:
+            hit_id = _save_anpr_hit(
+                plate_detected=detected_plate,
+                plate_matched=match["plate_number"],
+                vehicle_id=match["id"],
+                alert_id=alert_id,
+                camera_code=camera_code,
+                confidence=round(max(conf, plate_conf, 0.95), 3),
+                threat_level=match.get("threat_level", "HIGH"),
+            )
+            print(f"[ANPR] WATCHLIST MATCH — Track #{track_id} detected '{detected_plate}' "
+                  f"→ matched '{match['plate_number']}' ({match.get('threat_level')}) on {camera_code}")
+            return {
+                "hit_id":         hit_id,
+                "plate_detected": detected_plate,
+                "plate_matched":  match["plate_number"],
+                "vehicle_id":     match["id"],
+                "threat_level":   match.get("threat_level", "HIGH"),
+                "make":           match.get("make", ""),
+                "model":          match.get("model", ""),
+            }
 
+    # Step 2: Optical OCR fallback only if step 1 did not find a match
+    candidates = _extract_plate_candidates(crop)
+    test_plates = [c for c in candidates if c != detected_plate]
     if not test_plates:
         return None
 

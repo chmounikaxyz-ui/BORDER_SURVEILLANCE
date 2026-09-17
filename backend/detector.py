@@ -499,9 +499,13 @@ class DetectionEngine:
         track_plates: Dict[int, str] = {}
         alerted_tracks: set = set()
         alerted_plates: set = set()
+        scanned_track_attempts: Dict[int, int] = {}
         frame_idx     = 0
         alerts_generated = 0
         alert_summaries: list = []
+
+        # Adaptive stride: sample video at ~6-8 fps for rapid, responsive detection
+        stride = 4 if total_frames > 120 else (2 if total_frames > 50 else 1)
 
         try:
             while True:
@@ -510,8 +514,19 @@ class DetectionEngine:
                     break
                 frame_idx += 1
 
-                # Process every frame for high fidelity, or skip every 2nd on slow CPUs
-                if frame_idx > 1 and frame_idx % 2 != 0:
+                # Sample frames according to stride for 4x-10x speedup
+                if frame_idx > 1 and (frame_idx % stride != 0):
+                    # Keep UI progress updating continuously
+                    if frame_idx % 8 == 0 or frame_idx == total_frames:
+                        progress = min(99, max(1, int(frame_idx / total_frames * 100)))
+                        summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
+                        _update_job(
+                            job_id,
+                            progress=progress,
+                            current_frame=frame_idx,
+                            alerts_generated=alerts_generated,
+                            alert_summary=summary_text,
+                        )
                     continue
 
                 fh, fw = frame.shape[:2]
@@ -586,7 +601,9 @@ class DetectionEngine:
 
                     # ── Vehicle Watchlist & License Plate Scan ────────────────
                     anpr_hit = track_plates.get(track_id)
-                    if is_vehicle and anpr_hit is None:
+                    scan_count = scanned_track_attempts.get(track_id, 0)
+                    if is_vehicle and anpr_hit is None and scan_count < 3:
+                        scanned_track_attempts[track_id] = scan_count + 1
                         crop_h = orig_y2 - orig_y1
                         crop_w = orig_x2 - orig_x1
                         pad_y = int(crop_h * 0.06)
@@ -919,12 +936,6 @@ class DetectionEngine:
                 del results
                 del infer_frame
                 del annotated
-                if frame_idx % 10 == 0:
-                    gc.collect()
-
-                # Pacing so the browser receives a steady, visible live video feed
-                time.sleep(max(0.015, 1.0 / (fps * 1.2)))
-
                 # ── Progress update every frame for continuous progress feedback ─────
                 progress = min(99, max(1, int(frame_idx / total_frames * 100)))
                 summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
