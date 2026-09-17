@@ -514,6 +514,14 @@ class DetectionEngine:
                     break
                 frame_idx += 1
 
+                # If incoming frame is large (1080p/4K), downsample to 640px max width immediately to prevent RAM OOM
+                if frame.shape[1] > 640:
+                    scale_init = 640.0 / float(frame.shape[1])
+                    frame = cv2.resize(frame, (640, int(frame.shape[0] * scale_init)))
+
+                if frame_idx % 20 == 0:
+                    gc.collect()
+
                 # Sample frames according to stride for 4x-10x speedup
                 if frame_idx > 1 and (frame_idx % stride != 0):
                     # Keep UI progress updating continuously
@@ -550,7 +558,7 @@ class DetectionEngine:
                                 tracker="bytetrack.yaml",
                                 classes=TARGET_CLASSES,
                                 conf=0.30,
-                                imgsz=384,
+                                imgsz=256,
                                 verbose=False,
                             )
                         except Exception:
@@ -558,7 +566,7 @@ class DetectionEngine:
                                 infer_frame,
                                 classes=TARGET_CLASSES,
                                 conf=0.30,
-                                imgsz=384,
+                                imgsz=256,
                                 verbose=False,
                             )
                 except Exception as track_err:

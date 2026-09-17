@@ -68,17 +68,8 @@ def _get_paddle():
 
 
 def _get_easyocr():
-    global _EASYOCR, _EASYOCR_TRIED
-    if _EASYOCR_TRIED:
-        return _EASYOCR
-    _EASYOCR_TRIED = True
-    try:
-        import easyocr  # type: ignore
-        _EASYOCR = easyocr.Reader(['en'], verbose=False)
-        print("[ANPR] EasyOCR loaded [OK]")
-    except Exception:
-        _EASYOCR = None
-    return _EASYOCR
+    # Disabled on cloud deployment to keep RAM under 150MB (OpenCV template OCR + PyTesseract used instead)
+    return None
 
 
 def _get_pytesseract():

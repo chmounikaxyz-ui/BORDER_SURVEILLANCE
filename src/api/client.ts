@@ -324,7 +324,11 @@ export async function processVideo(videoPath: string): Promise<{ job_id?: string
           const parsed = JSON.parse(txt);
           lastError = parsed.detail || parsed.message || txt;
         } catch {
-          lastError = txt;
+          if (txt.includes('502') || txt.includes('Bad Gateway')) {
+            lastError = 'Render server instance is waking up / restarting (502 Gateway). Please wait a few moments and try again.';
+          } else {
+            lastError = txt.replace(/<[^>]*>/g, '').trim() || `HTTP error ${res.status}`;
+          }
         }
       }
     } catch (err: any) {
@@ -359,7 +363,11 @@ export async function processSampleVideo(): Promise<{ job_id?: string; status?: 
           const parsed = JSON.parse(txt);
           lastError = parsed.detail || parsed.message || txt;
         } catch {
-          lastError = txt;
+          if (txt.includes('502') || txt.includes('Bad Gateway')) {
+            lastError = 'Render server instance is waking up / restarting (502 Gateway). Please wait a few moments and try again.';
+          } else {
+            lastError = txt.replace(/<[^>]*>/g, '').trim() || `HTTP error ${res.status}`;
+          }
         }
       }
     } catch (err: any) {
