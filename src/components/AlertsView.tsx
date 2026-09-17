@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { TacticalAlert, AlertSeverity, AlertCategory } from '../types';
-import { submitAlertFeedback } from '../api/client';
+import { submitAlertFeedback, resolveMediaUrl } from '../api/client';
 
 interface AlertsViewProps {
   alerts: TacticalAlert[];
@@ -157,7 +157,24 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     }
   }, [activeAlert?.id]);
 
-  const resolvedVideoUrl = 
+  const [videoLoadError, setVideoLoadError] = useState(false);
+
+  useEffect(() => {
+    setVideoLoadError(false);
+  }, [activeAlert?.id]);
+
+  useEffect(() => {
+    const handleVideoUpdated = (e: any) => {
+      const { id } = e.detail || {};
+      if (id === activeAlert?.id) {
+        setVideoLoadError(false);
+      }
+    };
+    window.addEventListener('border_vision_alert_video_updated', handleVideoUpdated);
+    return () => window.removeEventListener('border_vision_alert_video_updated', handleVideoUpdated);
+  }, [activeAlert?.id]);
+
+  const rawVideoUrl = 
     (activeAlert?.videoUrl && (
       activeAlert.videoUrl.endsWith('.mp4') ||
       activeAlert.videoUrl.endsWith('.webm') ||
@@ -174,13 +191,17 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       ? '/uploads/14266560_3840_2160_30fps.mp4'
       : '/evidence/videos/ALRT-0EEA47.mp4');
 
-  const candidatePhotoUrl = 
+  const resolvedVideoUrl = resolveMediaUrl(rawVideoUrl);
+
+  const rawCandidatePhoto = 
     activeAlert?.capturedFrameUrl ||
     (activeAlert?.imageUrl && !activeAlert.imageUrl.endsWith('.mp4') && !activeAlert.imageUrl.endsWith('.webm') && !activeAlert.imageUrl.includes('/evidence/videos/') ? activeAlert.imageUrl : '') ||
     activeAlert?.subject?.photoBase64 ||
     '';
 
-  const isDirectVideoFile = Boolean(resolvedVideoUrl);
+  const candidatePhotoUrl = resolveMediaUrl(rawCandidatePhoto);
+
+  const isDirectVideoFile = Boolean(resolvedVideoUrl && !videoLoadError);
 
   // Attach live camera stream when in video mode and no direct mp4 video file exists
   useEffect(() => {
@@ -778,7 +799,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   aria-hidden="true"
                 />
                 {viewMode === 'video' ? (
-                  resolvedVideoUrl ? (
+                  resolvedVideoUrl && !videoLoadError ? (
                     <video
                       ref={modalVideoRef}
                       src={resolvedVideoUrl}
@@ -792,6 +813,10 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                       controlsList="nodownload noplaybackrate nofullscreen noremoteplayback"
                       className="absolute inset-0 w-full h-full object-cover z-[1]"
                       poster={candidatePhotoUrl || DEFAULT_SURVEILLANCE_IMAGE}
+                      onError={() => {
+                        console.warn('[Video Player] Video source failed to load, falling back to frame:', resolvedVideoUrl);
+                        setVideoLoadError(true);
+                      }}
                     />
                   ) : candidatePhotoUrl ? (
                     <div className="absolute inset-0 z-[1] flex flex-col">
@@ -806,7 +831,10 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                         <div className="flex items-center gap-2">
                           <span className="material-symbols-outlined text-[15px] text-[#adc6ff]">photo_camera</span>
                           <span className="text-[#c2c6d6] font-mono">
-                            High-resolution optical incident frame recorded at detection time
+                            {videoLoadError
+                              ? 'Forensic incident frame preserved (Video clip synchronizing or offline)'
+                              : 'High-resolution optical incident frame recorded at detection time'
+                            }
                           </span>
                         </div>
                         <span className="text-[10px] font-mono text-[#8c909f]">
@@ -833,12 +861,13 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                     }}
                     className="absolute inset-0 w-full h-full object-cover z-[1]"
                   />
-                ) : resolvedVideoUrl ? (
+                ) : resolvedVideoUrl && !videoLoadError ? (
                   <video
                     src={resolvedVideoUrl}
                     playsInline
                     muted
                     controls={false}
+                    onError={() => setVideoLoadError(true)}
                     className="absolute inset-0 w-full h-full object-cover z-[1]"
                   />
                 ) : (

@@ -112,14 +112,14 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
 
   // ── Frame detection overlay ONLY when job is complete in player mode ─────────
   useEffect(() => {
-    if (!videoPreviewUrl || !job || job.status !== 'complete' || streamMode !== 'player') {
+    if (!videoPreviewUrl || !job || job.status !== 'complete' || displayMode !== 'player') {
       setLiveDetections([]);
       return;
     }
 
     const interval = setInterval(runFrameDetection, 300);
     return () => clearInterval(interval);
-  }, [videoPreviewUrl, job?.status, streamMode, runFrameDetection]);
+  }, [videoPreviewUrl, job?.status, displayMode, runFrameDetection]);
 
   // ── Poll job status while running (fast 500ms updates) ──────────────────────
   useEffect(() => {

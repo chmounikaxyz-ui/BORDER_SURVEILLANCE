@@ -41,6 +41,23 @@ export function setCustomApiUrl(url: string): void {
   } catch {}
 }
 
+export function resolveMediaUrl(url?: string | null): string {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('blob:')) {
+    return url;
+  }
+  const apiBase = getApiBaseUrl();
+  if (apiBase.startsWith('http://') || apiBase.startsWith('https://')) {
+    try {
+      const origin = new URL(apiBase).origin;
+      return `${origin}${url.startsWith('/') ? '' : '/'}${url}`;
+    } catch {
+      return url;
+    }
+  }
+  return url;
+}
+
 const BASE = '/api';
 const ALT_BASE = 'http://localhost:8000/api';
 

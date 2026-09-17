@@ -53,18 +53,37 @@ SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
 SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
 
 def ensure_sample_videos():
-    """Ensure at least one sample surveillance video exists in UPLOADS_DIR."""
+    """Ensure sample videos exist in UPLOADS_DIR and EVIDENCE_VIDEOS_DIR for robust fallback playback."""
     try:
+        EVIDENCE_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+        EVIDENCE_FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+        sample_candidates = list(SAMPLES_DIR.glob("*.mp4"))
+        if not sample_candidates:
+            alt_samples = list(Path("samples").glob("*.mp4"))
+            if alt_samples:
+                sample_candidates = alt_samples
+
         existing_mp4s = list(UPLOADS_DIR.glob("*.mp4"))
-        if not existing_mp4s:
-            sample_candidates = list(SAMPLES_DIR.glob("*.mp4"))
-            if sample_candidates:
-                import shutil
-                for sc in sample_candidates:
-                    dest = UPLOADS_DIR / sc.name
-                    if not dest.exists():
-                        shutil.copy(sc, dest)
-                print(f"[BorderVision] Seeded {len(sample_candidates)} sample videos into {UPLOADS_DIR}")
+        if not existing_mp4s and sample_candidates:
+            import shutil
+            for sc in sample_candidates:
+                dest = UPLOADS_DIR / sc.name
+                if not dest.exists():
+                    shutil.copy(sc, dest)
+            print(f"[BorderVision] Seeded {len(sample_candidates)} sample videos into {UPLOADS_DIR}")
+
+        fallback_target = EVIDENCE_VIDEOS_DIR / "ALRT-0EEA47.mp4"
+        if not fallback_target.exists():
+            import shutil
+            cctv_cand = SAMPLES_DIR / "cctv_surveillance_sample.mp4"
+            if cctv_cand.exists():
+                shutil.copy(cctv_cand, fallback_target)
+                print(f"[BorderVision] Seeded fallback evidence video {fallback_target.name}")
+            elif sample_candidates:
+                shutil.copy(sample_candidates[0], fallback_target)
+                print(f"[BorderVision] Seeded fallback evidence video {fallback_target.name}")
     except Exception as e:
         print(f"[BorderVision] Warning during sample video seeding: {e}")
 
@@ -2193,6 +2212,23 @@ def detect_live_frame(body: FrameDetectRequest):
                 except Exception:
                     pass
 
+                saved_video_url = None
+                if getattr(body, "video_base64", None):
+                    try:
+                        raw_vid_b64 = body.video_base64.split(",")[-1]
+                        vid_bytes = base64.b64decode(raw_vid_b64)
+                        ext = "mp4" if "video/mp4" in body.video_base64 else "webm"
+                        vid_filename = f"{alert_id}.{ext}"
+                        vid_filepath = EVIDENCE_VIDEOS_DIR / vid_filename
+                        with open(vid_filepath, "wb") as vf:
+                            vf.write(vid_bytes)
+                        saved_video_url = f"/evidence/videos/{vid_filename}"
+                    except Exception as verr:
+                        print("[Tamper Video Evidence Save Error]:", verr)
+
+                if not saved_video_url:
+                    saved_video_url = "/evidence/videos/ALRT-0EEA47.mp4"
+
                 conn = get_conn()
                 now_dt = datetime.now(timezone.utc)
                 now_iso = now_dt.isoformat()
@@ -2232,7 +2268,7 @@ def detect_live_frame(body: FrameDetectRequest):
                         f"Optical sensor {camera_code} telemetry triggered critical tamper alert ({tamper_type}). {tamper_reason}. Immediate tactical perimeter check dispatched.",
                         timeline_json,
                         json.dumps([0.0, 0.0, 1.0, 1.0]),
-                        "/evidence/videos/ALRT-0EEA47.mp4",
+                        saved_video_url,
                         now_iso
                     )
                 )
@@ -2264,7 +2300,7 @@ def detect_live_frame(body: FrameDetectRequest):
                     "risk_score": 99,
                     "riskScore": 99,
                     "imageUrl": saved_frame_url,
-                    "videoUrl": "/evidence/videos/ALRT-0EEA47.mp4",
+                    "videoUrl": saved_video_url,
                     "capturedFrameUrl": saved_frame_url,
                     "bbox": [0.0, 0.0, 1.0, 1.0],
                 }

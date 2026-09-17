@@ -334,6 +334,25 @@ const CameraFeedCell: React.FC<{
                 setLiveDetections([]);
                 if (data.alert_created && data.new_alert) {
                   window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', { detail: data.new_alert }));
+                  // Capture rolling video clip of tamper incident and persist to evidence
+                  if (videoChunksRef.current && videoChunksRef.current.length > 0) {
+                    getRollingVideoBase64().then((vidB64) => {
+                      if (vidB64) {
+                        fetch(`${getApiBaseUrl()}/alerts/${data.new_alert.id}/video`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ video_base64: vidB64 })
+                        }).then(async (vRes) => {
+                          if (vRes.ok) {
+                            const vData = await vRes.json();
+                            window.dispatchEvent(new CustomEvent('border_vision_alert_video_updated', {
+                              detail: { id: data.new_alert.id, videoUrl: vData.video_url }
+                            }));
+                          }
+                        }).catch(() => {});
+                      }
+                    }).catch(() => {});
+                  }
                 }
                 return;
               } else {
@@ -352,6 +371,13 @@ const CameraFeedCell: React.FC<{
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ video_base64: vidB64 })
+                        }).then(async (vRes) => {
+                          if (vRes.ok) {
+                            const vData = await vRes.json();
+                            window.dispatchEvent(new CustomEvent('border_vision_alert_video_updated', {
+                              detail: { id: data.new_alert.id, videoUrl: vData.video_url }
+                            }));
+                          }
                         }).catch(() => {});
                       }
                     }).catch(() => {});

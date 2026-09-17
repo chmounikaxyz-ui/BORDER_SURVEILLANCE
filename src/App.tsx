@@ -266,8 +266,18 @@ export const App: React.FC = () => {
         );
       }
     };
+    const handleAlertVideoUpdated = (e: any) => {
+      const { id, videoUrl } = e.detail || {};
+      if (id && videoUrl) {
+        setAlerts(prev => prev.map(a => a.id === id ? { ...a, videoUrl } : a));
+      }
+    };
     window.addEventListener('border_vision_alert_triggered', handleAlertTriggered);
-    return () => window.removeEventListener('border_vision_alert_triggered', handleAlertTriggered);
+    window.addEventListener('border_vision_alert_video_updated', handleAlertVideoUpdated);
+    return () => {
+      window.removeEventListener('border_vision_alert_triggered', handleAlertTriggered);
+      window.removeEventListener('border_vision_alert_video_updated', handleAlertVideoUpdated);
+    };
   }, [pollApi, soundEnabled]);
 
   // Keyboard Shortcuts
