@@ -309,18 +309,19 @@ def _create_alert(
         {"title": "Tactical Incident Record Committed", "time": ts_str, "status": "error" if severity == "CRITICAL" else "pending"},
     ])
 
+    t_id = int(track_id) if track_id is not None else 1
     lat_deg = 34 + (frame_idx // 3600 % 60) / 100
     lat_min = (frame_idx // 60) % 60
     lat_sec = frame_idx % 60
-    lon_min = (track_id * 7) % 60
-    lon_sec = (track_id * 13) % 60
+    lon_min = (t_id * 7) % 60
+    lon_sec = (t_id * 13) % 60
     coords  = (
-        f"N {lat_deg:.0f}°{lat_min:02d}'{lat_sec:02d}.{track_id % 10}\""
-        f" W 118°{lon_min:02d}'{lon_sec:02d}.{track_id % 5}\""
+        f"N {lat_deg:.0f}°{lat_min:02d}'{lat_sec:02d}.{t_id % 10}\""
+        f" W 118°{lon_min:02d}'{lon_sec:02d}.{t_id % 5}\""
     )
 
     ai_text = _generate_ai_analysis(
-        class_name, zone, conf, risk, speed_heading, track_id,
+        class_name, zone, conf, risk, speed_heading, t_id,
         activity, anpr_hit, reid_event,
         matched_person=matched_person, sim_score=sim_score,
     )
@@ -376,7 +377,7 @@ def _create_alert(
             category,
             "PENDING VERIFICATION",
             class_name,
-            f"TRK-{class_name[0]}{track_id:03d}-{track_id % 100:02d}",
+            f"TRK-{class_name[0]}{t_id:03d}-{t_id % 100:02d}",
             round(sim_score / 100.0, 2) if matched_person else round(conf, 3),
             risk,
             zone["sensitivity"],
@@ -749,12 +750,18 @@ class DetectionEngine:
 
                         # Trigger alert & evidence ONCE per vehicle plate across the entire video
                         clean_plate = re.sub(r'[^A-Z0-9]', '', (anpr_hit.get('plate_matched') or '').upper())
+                        eff_track_id = track_id if track_id is not None else 1
                         if clean_plate and clean_plate not in alerted_plates:
                             alerted_plates.add(clean_plate)
-                            alerted_tracks.add(track_id)
+                            alerted_tracks.add(eff_track_id)
                             alerts_generated += 1
                             alert_id = f"ALRT-V-{uuid.uuid4().hex[:6].upper()}"
                             alert_summaries.append(f"Watchlist Vehicle Match ({anpr_hit['plate_matched']})")
+
+                            boxes_for_evidence = [
+                                {"xyxy": [orig_x1, orig_y1, orig_x2, orig_y2], "track_id": eff_track_id,
+                                 "class_name": cls_name, "conf": conf, "plate": anpr_hit['plate_matched'], "is_target": True}
+                            ]
 
                             try:
                                 filename, i_hash, f_hash = save_evidence_frame(
@@ -775,7 +782,7 @@ class DetectionEngine:
 
                             v_intrusion = {
                                 "zone": vehicle_zone,
-                                "track_id": track_id,
+                                "track_id": eff_track_id,
                                 "class_name": cls_name,
                                 "category": "vehicle",
                                 "confidence": conf,
@@ -952,20 +959,21 @@ class DetectionEngine:
                     cv2.putText(annotated, badge_label, (badge_x1 + icon_w + 4, text_y),
                                 cv2.FONT_HERSHEY_SIMPLEX, font_scale, dark_maroon_bgr, font_thick, cv2.LINE_AA)
 
+                    eff_track_id = track_id if track_id is not None else 1
                     boxes_for_evidence = [
-                        {"xyxy": [orig_x1, orig_y1, orig_x2, orig_y2], "track_id": track_id,
+                        {"xyxy": [orig_x1, orig_y1, orig_x2, orig_y2], "track_id": eff_track_id,
                          "class_name": "Person", "conf": conf, "is_target": True}
                     ]
 
-                    if (is_watchlist_match or intrusion) and track_id not in alerted_tracks:
+                    if (is_watchlist_match or intrusion) and eff_track_id not in alerted_tracks:
                         alerts_generated += 1
-                        alerted_tracks.add(track_id)
+                        alerted_tracks.add(eff_track_id)
                         alert_id = f"ALRT-{uuid.uuid4().hex[:6].upper()}"
                         if is_watchlist_match:
                             alert_summaries.append(f"Watchlist Match: {matched_person['name']} ({person_sim}%)")
                         else:
                             zone_title = intrusion.get("zone", {}).get("name", "Perimeter Area") if intrusion else "Perimeter Area"
-                            alert_summaries.append(f"Suspicious Behaviour: Person #{track_id} ({zone_title})")
+                            alert_summaries.append(f"Suspicious Behaviour: Person #{eff_track_id} ({zone_title})")
 
                         try:
                             filename, i_hash, f_hash = save_evidence_frame(
@@ -984,7 +992,7 @@ class DetectionEngine:
                                 reid_event = reid_store.process(
                                     crop=crop,
                                     camera_code=intrusion["zone"]["camera_code"] if intrusion else "CAM-ANALYSIS",
-                                    track_id=track_id,
+                                    track_id=eff_track_id,
                                     alert_id=alert_id,
                                 )
                         except Exception as exc:
@@ -1005,7 +1013,7 @@ class DetectionEngine:
                                     "sector": "Sector East, Perimeter Route",
                                     "camera_code": "CAM-ANALYSIS",
                                 },
-                                "track_id": track_id,
+                                "track_id": eff_track_id,
                                 "cls": cls,
                                 "category": "personnel",
                                 "class_name": "Person",
