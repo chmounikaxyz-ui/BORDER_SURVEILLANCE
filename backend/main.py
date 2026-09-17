@@ -597,10 +597,10 @@ def get_alerts():
         if not d.get("bbox") or not isinstance(d.get("bbox"), list) or len(d.get("bbox")) != 4:
             cat_upper = str(d.get("category") or "").upper()
             title_lower = str(d.get("title") or "").lower()
-            if cat_upper == "PERSONNEL" or "person" in title_lower:
-                d["bbox"] = [0.61, 0.28, 0.72, 0.52]
+            if cat_upper == "PERSONNEL" or "person" in title_lower or "suspect" in title_lower:
+                d["bbox"] = [0.592, 0.354, 0.668, 0.667]
             elif cat_upper == "VEHICLE" or "vehicle" in title_lower or "car" in title_lower or "anpr" in title_lower or "lc71" in title_lower:
-                d["bbox"] = [0.6699, 0.6429, 0.8336, 0.8798]
+                d["bbox"] = [0.678, 0.635, 0.837, 0.870]
 
         # Check if a separate captured frame exists for this alert
         alert_id = d.get("id", "")
