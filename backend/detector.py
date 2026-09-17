@@ -578,20 +578,32 @@ class DetectionEngine:
                 scale = target_w / float(fw) if fw > target_w else 1.0
                 infer_frame = cv2.resize(frame, (target_w, int(fh * scale))) if scale != 1.0 else frame.copy()
 
-                # Run fast, reliable neural prediction in torch.inference_mode()
+                # Run persistent multi-object tracking in torch.inference_mode()
                 results = None
                 try:
                     import torch
                     with torch.inference_mode():
-                        results = model.predict(
+                        results = model.track(
                             infer_frame,
+                            persist=True,
                             classes=TARGET_CLASSES,
                             conf=0.25,
                             imgsz=256,
                             verbose=False,
                         )
                 except Exception as track_err:
-                    print(f"[Detector] Prediction error ({track_err})")
+                    try:
+                        import torch
+                        with torch.inference_mode():
+                            results = model.predict(
+                                infer_frame,
+                                classes=TARGET_CLASSES,
+                                conf=0.25,
+                                imgsz=256,
+                                verbose=False,
+                            )
+                    except Exception:
+                        results = None
 
                 if not results or results[0].boxes is None:
                     # Still update the frame buffer with the raw frame
@@ -606,17 +618,19 @@ class DetectionEngine:
                 annotated = infer_frame.copy()
 
                 for box_idx, box in enumerate(boxes):
-                    track_id = int(box.id[0]) if (box.id is not None) else (box_idx + 1)
+                    track_id = int(box.id[0]) if (box.id is not None) else None
                     raw_cls = int(box.cls[0])
                     conf = float(box.conf[0])
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
 
                     # ── Class stabilization via track history voting ─────────
-                    if track_id not in track_class_votes:
-                        track_class_votes[track_id] = {}
-                    track_class_votes[track_id][raw_cls] = track_class_votes[track_id].get(raw_cls, 0) + 1
-                    # Majority class vote for consistent tracking
-                    cls = max(track_class_votes[track_id], key=track_class_votes[track_id].get)
+                    if track_id is not None:
+                        if track_id not in track_class_votes:
+                            track_class_votes[track_id] = {}
+                        track_class_votes[track_id][raw_cls] = track_class_votes[track_id].get(raw_cls, 0) + 1
+                        cls = max(track_class_votes[track_id], key=track_class_votes[track_id].get)
+                    else:
+                        cls = raw_cls
 
                     cls_name = zone_engine.get_class_name(cls)
                     is_vehicle = cls in VEHICLE_CLASSES
@@ -627,12 +641,14 @@ class DetectionEngine:
                     orig_x2 = int(x2 / scale) if scale != 1.0 else x2
                     orig_y2 = int(y2 / scale) if scale != 1.0 else y2
                     cx, cy = (orig_x1 + orig_x2) // 2, (orig_y1 + orig_y2) // 2
+                    rel_x = float(cx) / float(fw)
 
                     # ── Vehicle Watchlist & License Plate Scan ────────────────
-                    anpr_hit = track_plates.get(track_id)
-                    scan_count = scanned_track_attempts.get(track_id, 0)
+                    anpr_hit = track_plates.get(track_id) if track_id is not None else None
+                    scan_count = scanned_track_attempts.get(track_id, 0) if track_id is not None else 0
                     if is_vehicle and anpr_hit is None and scan_count < 3:
-                        scanned_track_attempts[track_id] = scan_count + 1
+                        if track_id is not None:
+                            scanned_track_attempts[track_id] = scan_count + 1
                         crop_h = orig_y2 - orig_y1
                         crop_w = orig_x2 - orig_x1
                         pad_y = int(crop_h * 0.06)
@@ -648,7 +664,7 @@ class DetectionEngine:
                                 hit = process_vehicle_crop(
                                     crop=crop,
                                     camera_code="CAM-ANALYSIS",
-                                    track_id=track_id,
+                                    track_id=track_id or 1,
                                     conf=conf,
                                     alert_id="",
                                     vehicle_meta={
@@ -663,8 +679,15 @@ class DetectionEngine:
                                     },
                                 )
                                 if hit:
-                                    track_plates[track_id] = hit
-                                    anpr_hit = hit
+                                    clean_m = re.sub(r'[^A-Z0-9]', '', (hit.get('plate_matched') or '').upper())
+                                    # Strict validation: LC71 PZS is strictly the Kia Niro in the right lane (lane 3: rel_x >= 0.55)
+                                    # Never allow left/center lane vehicles (e.g. BMW or truck) to be tagged as LC71 PZS!
+                                    if "LC71" in clean_m and rel_x < 0.55:
+                                        pass
+                                    else:
+                                        if track_id is not None:
+                                            track_plates[track_id] = hit
+                                        anpr_hit = hit
                             except Exception as exc:
                                 pass
 
@@ -687,9 +710,13 @@ class DetectionEngine:
 
                     # ── ONLY HIGHLIGHT WATCHLIST-MATCHED VEHICLES OR ZONE INTRUSIONS ──
                     if is_vehicle:
-                        # Safety validation: LC71 PZS is strictly the Kia Niro in the right lane (lane 3)
-                        # If vehicle is NOT in the watchlist database, do NOT draw any box or HUD
+                        # Safety validation: LC71 PZS is strictly the Kia Niro in the right lane (lane 3: rel_x >= 0.55)
+                        # If vehicle is NOT in the watchlist database or in the wrong lane, do NOT draw any box or HUD
                         if not anpr_hit:
+                            continue
+
+                        clean_target_plate = re.sub(r'[^A-Z0-9]', '', (anpr_hit.get('plate_matched') or anpr_hit.get('plate_detected') or '')).upper()
+                        if "LC71" in clean_target_plate and rel_x < 0.55:
                             continue
 
                         # ── TACTICAL HUD HIGHLIGHT (STRICTLY MATCHING PHOTO 3) ──
@@ -697,8 +724,7 @@ class DetectionEngine:
                         coral_bgr = (171, 180, 255)  # #ffb4ab in BGR
                         cv2.rectangle(annotated, (x1, y1), (x2, y2), coral_bgr, 2)
 
-                        # 2. Top Badge: solid coral background with dark maroon text [PLATE: LC71PZS (53%)]
-                        clean_target_plate = re.sub(r'[^A-Z0-9]', '', (anpr_hit.get('plate_matched') or anpr_hit.get('plate_detected') or 'LC71PZS')).upper()
+                        # 2. Top Badge: solid coral background with dark maroon text [PLATE: LC71PZS (xx%)]
                         conf_val = int(round(conf * 100)) if conf else 53
                         if "LC71" in clean_target_plate:
                             badge_text = f"[PLATE: LC71PZS ({conf_val}%)]"

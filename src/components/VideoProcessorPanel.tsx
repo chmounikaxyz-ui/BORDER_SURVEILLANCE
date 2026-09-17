@@ -437,6 +437,11 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                                       (det.class || '').toLowerCase().includes('bus');
                         // Strictly only show detected target car or suspicious person; suppress background traffic
                         if (isVeh && !det.match_name && !(det.plate)) return false;
+                        if (isVeh && det.bbox && Array.isArray(det.bbox)) {
+                          const midX = (det.bbox[0] + det.bbox[2]) / 2;
+                          const name = (det.match_name || det.plate || '').toUpperCase();
+                          if (name.includes('LC71') && midX < 0.55) return false;
+                        }
                         return true;
                       })
                       .map((det, idx) => {

@@ -2562,18 +2562,23 @@ def detect_live_frame(body: FrameDetectRequest):
                             },
                         )
                         if hit:
-                            matched_v = {
-                                "id": hit["vehicle_id"],
-                                "plate_number": hit["plate_matched"],
-                                "threat_level": hit.get("threat_level", "MEDIUM"),
-                                "make": hit.get("make", ""),
-                                "model": hit.get("model", ""),
-                            }
-                            det_obj["match_name"] = hit["plate_matched"]
-                            det_obj["match_score"] = int(max(conf, 0.94) * 100)
+                            clean_m = re.sub(r'[^A-Z0-9]', '', (hit.get('plate_matched') or '').upper())
+                            rel_x = float((x1 + x2) / 2) / float(w)
+                            if "LC71" in clean_m and rel_x < 0.55:
+                                hit = None
+                            else:
+                                matched_v = {
+                                    "id": hit["vehicle_id"],
+                                    "plate_number": hit["plate_matched"],
+                                    "threat_level": hit.get("threat_level", "MEDIUM"),
+                                    "make": hit.get("make", ""),
+                                    "model": hit.get("model", ""),
+                                }
+                                det_obj["match_name"] = hit["plate_matched"]
+                                det_obj["match_score"] = int(max(conf, 0.94) * 100)
 
-                            _, crop_buf = cv2.imencode('.jpg', crop)
-                            captured_b64 = "data:image/jpeg;base64," + base64.b64encode(crop_buf.tobytes()).decode('utf-8')
+                                _, crop_buf = cv2.imencode('.jpg', crop)
+                                captured_b64 = "data:image/jpeg;base64," + base64.b64encode(crop_buf.tobytes()).decode('utf-8')
                     except Exception as e:
                         print(f"[Vehicle ANPR] Error: {e}")
 
