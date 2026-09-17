@@ -666,10 +666,11 @@ class DetectionEngine:
                         badge_h = bh + 8
                         badge_y1 = max(0, y1 - badge_h)
                         badge_y2 = y1
-                        badge_x1 = x1
-                        badge_x2 = min(annotated.shape[1], x1 + bw + 12)
+                        badge_w = bw + 14
+                        badge_x1 = max(0, min(x1, annotated.shape[1] - badge_w - 2))
+                        badge_x2 = min(annotated.shape[1], badge_x1 + badge_w)
                         cv2.rectangle(annotated, (badge_x1, badge_y1), (badge_x2, badge_y2), coral_bgr, -1)
-                        cv2.putText(annotated, badge_text, (x1 + 6, y1 - 4),
+                        cv2.putText(annotated, badge_text, (badge_x1 + 6, y1 - 4),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, (5, 0, 65), 1, cv2.LINE_AA)
 
                         boxes_for_evidence = [
@@ -832,32 +833,55 @@ class DetectionEngine:
                             "activity": {"title": "Intrusion Movement", "type": "Perimeter Crossing", "description": "Subject traversing monitored perimeter zone"},
                         }
 
-                    # ── Personnel / Person Tracking & Suspicious Behaviour ─────
-                    person_color = (0, 0, 245) if (is_watchlist_match or intrusion or track_id in alerted_tracks) else (210, 100, 255)
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), person_color, 3 if is_watchlist_match else 2)
+                    # ── Personnel / Person Tracking & Suspicious Behaviour (Photo 2 Coral Tactical HUD) ──
+                    coral_bgr = (171, 180, 255)      # #ffb4ab in BGR
+                    dark_maroon_bgr = (2, 0, 65)      # #410002 in BGR
 
-                    c_len = min(16, max(4, (x2 - x1) // 4), max(4, (y2 - y1) // 4))
-                    cv2.line(annotated, (x1, y1), (x1 + c_len, y1), person_color, 3)
-                    cv2.line(annotated, (x1, y1), (x1, y1 + c_len), person_color, 3)
-                    cv2.line(annotated, (x2, y1), (x2 - c_len, y1), person_color, 3)
-                    cv2.line(annotated, (x2, y1), (x2, y1 + c_len), person_color, 3)
-                    cv2.line(annotated, (x1, y2), (x1 + c_len, y2), person_color, 3)
-                    cv2.line(annotated, (x1, y2), (x1, y2 - c_len), person_color, 3)
-                    cv2.line(annotated, (x2, y2), (x2 - c_len, y2), person_color, 3)
-                    cv2.line(annotated, (x2, y2), (x2, y2 - c_len), person_color, 3)
+                    # 1. Subtle inner tint matching Photo 2
+                    sub_box = annotated[max(0, y1):min(fh, y2), max(0, x1):min(fw, x2)]
+                    if sub_box.size > 0:
+                        tint = np.full_like(sub_box, coral_bgr)
+                        cv2.addWeighted(tint, 0.08, sub_box, 0.92, 0, sub_box)
 
+                    # 2. Sleek 2px bounding box (no clunky corner ticks)
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), coral_bgr, 2)
+
+                    # 3. Top Badge: solid coral background with dark maroon text matching Photo 2: [SUSPECT: PERSON (xx%)]
+                    conf_pct = int(round(conf * 100)) if conf <= 1.0 else int(round(conf))
                     if is_watchlist_match:
-                        person_label = f"WATCHLIST MATCH: {matched_person['name'].upper()} ({person_sim}%)"
+                        matched_name = matched_person.get("name", "SUBJECT").upper()
+                        badge_label = f"[WATCHLIST: {matched_name} ({person_sim}%)]"
                     elif intrusion or track_id in alerted_tracks:
-                        person_label = f"SUSPICIOUS BEHAVIOR: PERSON #{track_id} ({conf:.0%})"
+                        badge_label = f"[SUSPECT: PERSON ({conf_pct}%)]"
                     else:
-                        person_label = f"PERSON #{track_id} ({conf:.0%})"
+                        badge_label = f"[PERSON ({conf_pct}%)]"
 
-                    (pw, ph), _ = cv2.getTextSize(person_label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
-                    badge_py1 = max(0, y1 - ph - 8)
-                    cv2.rectangle(annotated, (x1, badge_py1), (x1 + pw + 8, y1), person_color, -1)
-                    cv2.putText(annotated, person_label, (x1 + 4, max(ph + 2, y1 - 3)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1)
+                    font_scale = 0.38
+                    font_thick = 1
+                    (pw, ph), baseline = cv2.getTextSize(badge_label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thick)
+
+                    icon_w = 14
+                    badge_h = ph + 10
+                    badge_w = pw + icon_w + 14
+
+                    badge_x1 = max(0, min(x1, fw - badge_w - 2))
+                    badge_x2 = min(fw, badge_x1 + badge_w)
+                    badge_y1 = max(0, y1 - badge_h) if y1 >= badge_h else y1
+                    badge_y2 = y1 if y1 >= badge_h else min(fh, y1 + badge_h)
+                    text_y = y1 - 5 if y1 >= badge_h else badge_y1 + ph + 5
+
+                    # Draw coral badge background
+                    cv2.rectangle(annotated, (badge_x1, badge_y1), (badge_x2, badge_y2), coral_bgr, -1)
+
+                    # Draw sleek person silhouette icon
+                    icon_cx = badge_x1 + 8
+                    icon_cy = text_y - (ph // 2)
+                    cv2.circle(annotated, (icon_cx, icon_cy - 3), 2, dark_maroon_bgr, -1, cv2.LINE_AA)
+                    cv2.ellipse(annotated, (icon_cx, icon_cy + 3), (4, 3), 0, 180, 360, dark_maroon_bgr, -1, cv2.LINE_AA)
+
+                    # Draw text in deep dark maroon with antialiasing
+                    cv2.putText(annotated, badge_label, (badge_x1 + icon_w + 4, text_y),
+                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, dark_maroon_bgr, font_thick, cv2.LINE_AA)
 
                     boxes_for_evidence = [
                         {"xyxy": [orig_x1, orig_y1, orig_x2, orig_y2], "track_id": track_id,

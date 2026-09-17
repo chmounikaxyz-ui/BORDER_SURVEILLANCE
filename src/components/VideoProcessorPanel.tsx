@@ -460,14 +460,15 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                           badgeText = `[${(det.class || 'TARGET').toUpperCase()} (${matchScore}%)]`;
                         }
 
-                        const badgeW = Math.max(160, badgeText.length * 8.2 + 20);
+                        const badgeW = Math.max(160, badgeText.length * 8.2 + (isPerson ? 32 : 20));
+                        const badgeX = Math.max(0, Math.min(x, 1000 - badgeW - 2));
                         const pillW = 144;
                         const pillX = x + (w - pillW) / 2;
                         const pillY = Math.max(y + 6, y + h - 26);
 
                         return (
                           <g key={idx} className="transition-all duration-200 ease-out pointer-events-none">
-                            {/* Photo 3 Tactical Coral Bounding Box */}
+                            {/* Photo 2 Tactical Coral Bounding Box */}
                             <rect
                               x={x}
                               y={y}
@@ -480,9 +481,9 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                               className="transition-all duration-200 ease-out"
                             />
 
-                            {/* Photo 3 Top Badge: Solid Coral Background */}
+                            {/* Photo 2 Top Badge: Solid Coral Background */}
                             <rect
-                              x={x}
+                              x={badgeX}
                               y={Math.max(0, y - 24)}
                               width={badgeW}
                               height="24"
@@ -490,9 +491,16 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                               rx="3"
                               className="transition-all duration-200 ease-out"
                             />
-                            {/* Photo 3 Top Badge Text: Deep Dark Maroon */}
+                            {/* Person Icon in Top Badge */}
+                            {isPerson && (
+                              <g transform={`translate(${badgeX + 8}, ${Math.max(0, y - 24) + 6})`}>
+                                <circle cx="4" cy="3" r="2.2" fill="#410002" />
+                                <path d="M1,10 C1,7.5 2.8,6.8 4,6.8 C5.2,6.8 7,7.5 7,10 Z" fill="#410002" />
+                              </g>
+                            )}
+                            {/* Photo 2 Top Badge Text: Deep Dark Maroon */}
                             <text
-                              x={x + 6}
+                              x={isPerson ? badgeX + 22 : badgeX + 6}
                               y={Math.max(16, y - 8)}
                               fill="#410002"
                               fontSize="11"
