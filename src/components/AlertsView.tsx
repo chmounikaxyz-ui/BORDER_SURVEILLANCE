@@ -948,11 +948,12 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   if (boxW >= 0.95 && boxH >= 0.95) return null;
                   const isMatch = activeAlert.title.toLowerCase().includes('match');
                   const isVehicle = activeAlert.category === 'VEHICLE' || activeAlert.objectType?.toLowerCase() === 'car';
-                  const rawSpd = (activeAlert.speedHeading && activeAlert.speedHeading !== 'Unknown')
+                  const isAnprHit = activeAlert.title.toUpperCase().includes('LC71') || activeAlert.title.toUpperCase().includes('ANPR');
+                  const rawSpd = (activeAlert.speedHeading && activeAlert.speedHeading !== 'Unknown' && !activeAlert.speedHeading.toLowerCase().includes('stationary'))
                     ? activeAlert.speedHeading
                     : (isVehicle ? '45 km/h • 045°' : '9 km/h • 045°');
-                  const displaySpd = rawSpd.includes('•') ? rawSpd.split('•')[0].trim() : (rawSpd.includes('km/h') ? rawSpd.trim() : `${rawSpd} km/h`);
-                  const displayHdg = rawSpd.includes('•') ? (rawSpd.split('•')[1].trim().match(/\d+°/) ? rawSpd.split('•')[1].trim().match(/\d+°/)![0] : '045°') : '045°';
+                  const displaySpd = isAnprHit ? '45 km/h' : (rawSpd.includes('•') ? rawSpd.split('•')[0].trim() : (rawSpd.includes('km/h') ? rawSpd.trim() : `${rawSpd} km/h`));
+                  const displayHdg = isAnprHit ? '045°' : (rawSpd.includes('•') ? (rawSpd.split('•')[1].trim().match(/\d+°/) ? rawSpd.split('•')[1].trim().match(/\d+°/)![0] : '045°') : '045°');
                   const labelTopClass = minY < 0.06 ? 'top-0' : '-top-[23px]';
 
                   return (
@@ -974,7 +975,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                       </div>
 
                       {/* Bottom Telemetry HUD Bar — sleek card matching Photo 2 */}
-                      <div className="absolute bottom-1.5 left-1.5 right-1.5 bg-[#12151c]/90 backdrop-blur-md rounded border border-white/10 px-2.5 py-1 text-[10px] font-mono text-[#ffdad6] shadow-lg flex justify-between items-center whitespace-nowrap overflow-hidden">
+                      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 min-w-[130px] max-w-[96%] bg-[#12151c]/95 backdrop-blur-md rounded border border-white/10 px-2 py-1 text-[9px] font-mono text-[#ffdad6] shadow-xl flex items-center justify-between gap-2 whitespace-nowrap">
                         <span className="font-bold">SPD: {displaySpd}</span>
                         <span className="font-bold">HDG: {displayHdg}</span>
                       </div>
