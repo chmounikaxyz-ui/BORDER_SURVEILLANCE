@@ -140,6 +140,7 @@ def invalidate_watchlist_cache():
 
 try:
     _conn = get_conn()
+    _conn.execute("DELETE FROM alerts WHERE camera_code LIKE 'CAM-LIVE%' AND title LIKE '%SUSPICIOUS%'")
     _conn.execute("""
             DELETE FROM alerts WHERE id NOT IN (
                 SELECT MIN(id) FROM alerts GROUP BY REPLACE(REPLACE(REPLACE(title, ' ', ''), '-', ''), '(', '')
@@ -155,6 +156,7 @@ async def lifespan(app: FastAPI):
     init_db()
     try:
         conn = get_conn()
+        conn.execute("DELETE FROM alerts WHERE camera_code LIKE 'CAM-LIVE%' AND title LIKE '%SUSPICIOUS%'")
         conn.execute("""
             DELETE FROM alerts WHERE id NOT IN (
                 SELECT MIN(id) FROM alerts GROUP BY REPLACE(REPLACE(REPLACE(title, ' ', ''), '-', ''), '(', '')
@@ -794,7 +796,7 @@ def get_evidence():
         raw_type = d.pop("event_type", "Intrusion") or "Intrusion"
         clean_type = raw_type.replace("_", " ").upper()
         if clean_type == "PERSON":
-            clean_type = "PERSON WITH SUSPICIOUS BEHAVIOR"
+            clean_type = "PERSONNEL DETECTION"
         d["eventType"] = clean_type
 
         camera_code = d.pop("camera_code", "") or "CAM-LIVE-78"
@@ -2579,20 +2581,52 @@ def detect_live_frame(body: FrameDetectRequest):
                 should_trigger_alert = True
                 title_str = f"WATCHLIST ANPR HIT — {matched_vehicle['plate_number']} ({matched_vehicle.get('make', '')} {matched_vehicle.get('model', '')})"
                 priority_tier = "CRITICAL"
-            elif cls_name == "person" and conf >= 0.25:
-                should_trigger_alert = True
-                title_str = "PERSON WITH SUSPICIOUS BEHAVIOR DETECTED"
-                priority_tier = "HIGH"
-            elif cls_name in ["car", "motorcycle", "bus", "truck"] and conf >= 0.25:
-                should_trigger_alert = True
-                title_str = f"VEHICLE INTRUSION — {cls_name.upper()} DETECTED"
-                priority_tier = "HIGH"
             elif getattr(body, "is_manual_capture", False):
                 should_trigger_alert = True
                 title_str = "MANUAL OPERATOR INCIDENT RECORDING"
                 priority_tier = "HIGH"
             else:
-                should_trigger_alert = False
+                # Normal live webcam / optical stream detection of authorized or unclassified persons/vehicles
+                # MUST NOT trigger fake "suspicious behavior" alerts!
+                # Only trigger if an explicit restricted dynamic zone polygon is breached
+                in_restricted_zone = False
+                zone_name = ""
+                try:
+                    cx = (nx1 + nx2) / 2.0
+                    cy = (ny1 + ny2) / 2.0
+                    z_rows = conn.execute(
+                        "SELECT name, coordinates, sensitivity FROM dynamic_zones WHERE camera_code = ?",
+                        (camera_code,)
+                    ).fetchall()
+                    for z_row in z_rows:
+                        z_coords = json.loads(z_row["coordinates"]) if z_row["coordinates"] else []
+                        if len(z_coords) >= 3:
+                            inside = False
+                            n = len(z_coords)
+                            p1x, p1y = z_coords[0]
+                            for idx in range(n + 1):
+                                p2x, p2y = z_coords[idx % n]
+                                if cy > min(p1y, p2y):
+                                    if cy <= max(p1y, p2y):
+                                        if cx <= max(p1x, p2x):
+                                            if p1y != p2y:
+                                                xinters = (cy - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                                            if p1x == p2x or cx <= xinters:
+                                                inside = not inside
+                                p1x, p1y = p2x, p2y
+                            if inside:
+                                in_restricted_zone = True
+                                zone_name = z_row["name"]
+                                break
+                except Exception:
+                    pass
+
+                if in_restricted_zone and conf >= 0.40:
+                    should_trigger_alert = True
+                    title_str = f"RESTRICTED ZONE INTRUSION — {cls_name.upper()} DETECTED ({zone_name})"
+                    priority_tier = "HIGH"
+                else:
+                    should_trigger_alert = False
 
             # Frame probe suppression: CAM-ANALYSIS or create_alert=False should never create DB alerts
             if not getattr(body, "create_alert", True) or camera_code == "CAM-ANALYSIS":

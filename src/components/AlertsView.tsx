@@ -273,28 +273,32 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       return list.map(u => resolveMediaUrl(u)).filter((u, i, arr) => u && arr.indexOf(u) === i);
     }
 
-    if (isBiometric) {
-      // BIOMETRIC WATCHLIST ALERTS:
-      // Real facial recognition alerts MUST NEVER play night CCTV outdoor footage!
+    const isLiveCam = Boolean(activeAlert.cameraCode && (activeAlert.cameraCode.startsWith('CAM-LIVE') || activeAlert.cameraCode.includes('LIVE')));
+
+    if (isLiveCam || isBiometric) {
+      // LIVE CAMERA & BIOMETRIC ALERTS:
+      // Strictly use real incident video clips specifically recorded for this alert
+      // NEVER fall back to cctv_surveillance_sample.mp4 or ALRT-0EEA47!
       if (activeAlert.videoUrl && hasRealVideo(activeAlert.videoUrl, activeAlert.id) &&
           !activeAlert.videoUrl.includes('cctv_surveillance') &&
           !activeAlert.videoUrl.includes('0EEA47') &&
-          !activeAlert.videoUrl.includes('normal_realistic')) {
+          !activeAlert.videoUrl.includes('14266560')) {
         list.push(activeAlert.videoUrl);
       }
-      // If no recorded incident video was specifically saved for this biometric hit, return list
       return list.map(u => resolveMediaUrl(u)).filter((u, i, arr) => u && arr.indexOf(u) === i);
     }
 
-    // PERIMETER / SUSPICIOUS INTRUSION ALERTS:
+    // PERIMETER / VIDEO ANALYSIS FOOTAGE (ALRT-0EEA47 / Night Perimeter):
     if (activeAlert.videoUrl && hasRealVideo(activeAlert.videoUrl, activeAlert.id)) {
       list.push(activeAlert.videoUrl);
     }
     if (activeAlert.imageUrl && hasRealVideo(activeAlert.imageUrl, activeAlert.id)) {
       list.push(activeAlert.imageUrl);
     }
-    list.push('/samples/cctv_surveillance_sample.mp4');
-    list.push('/evidence/videos/ALRT-0EEA47.mp4');
+    if (activeAlert.id === 'ALRT-0EEA47' || activeAlert.cameraCode === 'BOP-07' || activeAlert.sector?.toLowerCase().includes('sector east')) {
+      list.push('/samples/cctv_surveillance_sample.mp4');
+      list.push('/evidence/videos/ALRT-0EEA47.mp4');
+    }
     return list.map(u => resolveMediaUrl(u)).filter((u, i, arr) => u && arr.indexOf(u) === i);
   }, [activeAlert?.id, activeAlert?.videoUrl, activeAlert?.imageUrl, activeAlert?.title, activeAlert?.description, activeAlert?.category, activeAlert?.cameraCode]);
 
@@ -486,14 +490,11 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
   const hasVideoClip = (alert: TacticalAlert | null | undefined): boolean => {
     if (!alert) return false;
-    const t = `${alert.title || ''} ${alert.description || ''}`.toUpperCase();
-    const isBiometric = t.includes('MATCH') || t.includes('BIOMETRIC');
-    if (isBiometric) {
-      const hasDirectVid = Boolean(alert.videoUrl && hasRealVideo(alert.videoUrl, alert.id));
-      const isLiveCam = Boolean(alert.cameraCode && (alert.cameraCode.startsWith('CAM-LIVE') || alert.cameraCode.includes('LIVE')));
-      return hasDirectVid || isLiveCam;
-    }
-    return true;
+    const isLiveCam = Boolean(alert.cameraCode && (alert.cameraCode.startsWith('CAM-LIVE') || alert.cameraCode.includes('LIVE')));
+    const hasDirectVid = Boolean(alert.videoUrl && hasRealVideo(alert.videoUrl, alert.id));
+    const isVeh = alert.category === 'VEHICLE' || alert.title.includes('LC71') || alert.title.includes('ANPR');
+    const isSeededPerimeter = alert.id === 'ALRT-0EEA47' || alert.cameraCode === 'BOP-07';
+    return hasDirectVid || isLiveCam || isVeh || isSeededPerimeter;
   };
 
   const isWatchlistAlert = (alert: TacticalAlert | null | undefined): boolean => {
@@ -558,13 +559,13 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       return `PLATE: ${plateText} (${pct}%)`;
     }
 
-    if (isSuspiciousAlert(alert) || alert.title.toLowerCase().includes('suspicious')) {
+    if (alert.id === 'ALRT-0EEA47' || alert.cameraCode === 'BOP-07' || (isSuspiciousAlert(alert) && !alert.cameraCode?.startsWith('CAM-LIVE'))) {
       return `SUSPECT: PERSON (${pct}%)`;
     }
 
-    // Default matching: e.g. "PERSON: 80%"
+    // Default matching: e.g. "PERSON (80%)"
     const typeLabel = alert.objectType ? alert.objectType.toUpperCase() : (alert.category === 'PERSONNEL' ? 'PERSON' : 'TARGET');
-    return `${typeLabel}: ${pct}%`;
+    return `${typeLabel} (${pct}%)`;
   };
 
   const getSubjectDetails = (alert: TacticalAlert) => {
@@ -1047,47 +1048,41 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                           onLoadedMetadata={updateTrackingFromVideo}
                           onError={handleVideoError}
                         />
-                      {isVideoBuffering && (
-                        <div className="absolute inset-0 z-[3] flex flex-col items-center justify-center bg-black/50 backdrop-blur-[2px] pointer-events-none transition-opacity duration-200">
-                          <div className="flex items-center gap-2.5 px-4 py-2 rounded-full bg-[#12151c]/90 border border-[#adc6ff]/30 text-[#adc6ff] text-[11px] font-mono shadow-2xl tracking-wider">
-                            <span className="material-symbols-outlined text-[16px] animate-spin text-[#adc6ff]">sync</span>
-                            <span>STREAMING FOOTAGE...</span>
+                        {isVideoBuffering && (
+                          <div className="absolute inset-0 z-[3] flex flex-col items-center justify-center bg-black/50 backdrop-blur-[2px] pointer-events-none transition-opacity duration-200">
+                            <div className="flex items-center gap-2.5 px-4 py-2 rounded-full bg-[#12151c]/90 border border-[#adc6ff]/30 text-[#adc6ff] text-[11px] font-mono shadow-2xl tracking-wider">
+                              <span className="material-symbols-outlined text-[16px] animate-spin text-[#adc6ff]">sync</span>
+                              <span>STREAMING FOOTAGE...</span>
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </>
-                  ) : candidatePhotoUrl ? (
-                    <div className="absolute inset-0 z-[1] flex flex-col">
-                      <img
-                        alt="Detected Frame"
-                        src={candidatePhotoUrl}
-                        onError={(e) => { (e.currentTarget as HTMLImageElement).src = DEFAULT_SURVEILLANCE_IMAGE; }}
-                        className="w-full h-full object-fill"
-                      />
-
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/85 backdrop-blur-xs px-4 py-2 text-[11px] font-mono text-[#adc6ff] flex items-center justify-between border-t border-white/10 z-[2]">
-                        <div className="flex items-center gap-2">
-                          <span className="material-symbols-outlined text-[15px] text-[#adc6ff]">photo_camera</span>
-                          <span className="text-[#c2c6d6] font-mono">
-                            {videoLoadError
-                              ? 'Forensic incident frame preserved (Video clip synchronizing or offline)'
-                              : 'High-resolution optical incident frame recorded at detection time'
-                            }
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <video
+                          ref={modalVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          disablePictureInPicture
+                          disableRemotePlayback
+                          className="absolute inset-0 w-full h-full object-fill z-[1]"
+                          poster={candidatePhotoUrl || DEFAULT_SURVEILLANCE_IMAGE}
+                        />
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/85 backdrop-blur-xs px-4 py-2 text-[11px] font-mono text-[#adc6ff] flex items-center justify-between border-t border-white/10 z-[2]">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+                            <span className="text-[#c2c6d6] font-mono">
+                              Live Optical Sensor Stream • Real-time Tactical Surveillance ({activeAlert.cameraCode || 'CAM-LIVE-78'})
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-mono text-[#8c909f]">
+                            BORDERVISION AI • {activeAlert.id}
                           </span>
                         </div>
-                        <span className="text-[10px] font-mono text-[#8c909f]">
-                          BORDERVISION AI • {activeAlert.id}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <img
-                      alt=""
-                      src={DEFAULT_SURVEILLANCE_IMAGE}
-                      className="absolute inset-0 w-full h-full object-fill z-[1]"
-                    />
-                  )
-                ) : candidatePhotoUrl ? (
+                      </>
+                    )
+                  ) : candidatePhotoUrl ? (
                   <img
                     alt="Incident Captured Frame"
                     src={candidatePhotoUrl}
@@ -1304,11 +1299,24 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
                     <div className="flex items-center gap-3">
                       <button
-                        onClick={() => onDownloadEvidence(activeAlert)}
+                        onClick={() => {
+                          if (isDirectVideoFile) {
+                            onDownloadEvidence(activeAlert);
+                          } else if (candidatePhotoUrl && !candidatePhotoUrl.startsWith('data:image/svg')) {
+                            const a = document.createElement('a');
+                            a.href = candidatePhotoUrl;
+                            a.download = `${activeAlert.id}_forensic_frame.jpg`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                          } else {
+                            onDownloadEvidence(activeAlert);
+                          }
+                        }}
                         className="flex items-center gap-2 px-3.5 py-2 bg-[#222a39] hover:bg-[#2c3544] text-[#adc6ff] rounded-lg text-[12px] font-bold uppercase transition-colors border border-[#adc6ff]/30 shadow-sm"
                       >
                         <span className="material-symbols-outlined text-[16px]">download</span>
-                        Export Video Clip
+                        {isDirectVideoFile ? 'Export Video Clip' : 'Export Optical Frame'}
                       </button>
                     </div>
                   </div>

@@ -84,8 +84,10 @@ const CameraFeedCell: React.FC<{
     const imgRef = useRef<HTMLImageElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-    const headerChunkRef = useRef<Blob | null>(null);
-    const videoChunksRef = useRef<Blob[]>([]);
+    const recordedBlobsRef = useRef<Blob[]>([]);
+    const lastFinalizedVideoRef = useRef<Blob | null>(null);
+    const recordingCycleTimerRef = useRef<any>(null);
+    const isComponentMountedRef = useRef(true);
     const isDetectingRef = useRef(false);
     const lastDetectionTimeRef = useRef(0);
     const [webcamError, setWebcamError] = useState<string | null>(null);
@@ -103,23 +105,45 @@ const CameraFeedCell: React.FC<{
             ? 'video/webm'
             : 'video/mp4';
 
-        headerChunkRef.current = null;
-        videoChunksRef.current = [];
-
+        let currentChunks: Blob[] = [];
         const mr = new MediaRecorder(stream, { mimeType });
+
         mr.ondataavailable = (event) => {
           if (event.data && event.data.size > 0) {
-            if (!headerChunkRef.current) {
-              headerChunkRef.current = event.data;
-            }
-            videoChunksRef.current.push(event.data);
-            if (videoChunksRef.current.length > 10) {
-              videoChunksRef.current.shift();
-            }
+            currentChunks.push(event.data);
           }
         };
-        mr.start(1000); // 1000ms timeslice (10s rolling recording buffer)
+
+        mr.onstop = () => {
+          if (currentChunks.length > 0) {
+            const finishedBlob = new Blob(currentChunks, { type: mimeType });
+            if (finishedBlob.size > 1500) {
+              lastFinalizedVideoRef.current = finishedBlob;
+              recordedBlobsRef.current.push(finishedBlob);
+              if (recordedBlobsRef.current.length > 3) {
+                recordedBlobsRef.current.shift();
+              }
+            }
+          }
+          currentChunks = [];
+          if (isComponentMountedRef.current && stream && stream.active && mediaRecorderRef.current) {
+            try {
+              mr.start();
+            } catch {}
+          }
+        };
+
+        mr.start();
         mediaRecorderRef.current = mr;
+
+        if (recordingCycleTimerRef.current) clearInterval(recordingCycleTimerRef.current);
+        recordingCycleTimerRef.current = setInterval(() => {
+          if (mr.state === 'recording') {
+            try {
+              mr.stop();
+            } catch {}
+          }
+        }, 3500);
       } catch (e) {
         console.warn('[MediaRecorder] Setup error:', e);
       }
@@ -127,6 +151,7 @@ const CameraFeedCell: React.FC<{
 
     // 1. Setup recorder for local webcam
     useEffect(() => {
+      isComponentMountedRef.current = true;
       if (!isWebcam || !cam || cam.status !== 'online') return;
       setWebcamError(null);
 
@@ -144,6 +169,11 @@ const CameraFeedCell: React.FC<{
         });
 
       return () => {
+        isComponentMountedRef.current = false;
+        if (recordingCycleTimerRef.current) {
+          clearInterval(recordingCycleTimerRef.current);
+          recordingCycleTimerRef.current = null;
+        }
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
           try { mediaRecorderRef.current.stop(); } catch (e) {}
           mediaRecorderRef.current = null;
@@ -156,7 +186,6 @@ const CameraFeedCell: React.FC<{
       if (isWebcam || !cam || cam.status !== 'online') return;
 
       let timer: any = null;
-      // Periodically sync img frames to canvas so captureStream receives live frames
       timer = setInterval(() => {
         if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0 && canvasRef.current) {
           const ctx = canvasRef.current.getContext('2d');
@@ -168,7 +197,6 @@ const CameraFeedCell: React.FC<{
         }
       }, 150);
 
-      // Give img 500ms to load then attach captureStream recorder
       const initRecorderTimer = setTimeout(() => {
         if (canvasRef.current && !mediaRecorderRef.current && (canvasRef.current as any).captureStream) {
           try {
@@ -185,6 +213,10 @@ const CameraFeedCell: React.FC<{
       return () => {
         clearInterval(timer);
         clearTimeout(initRecorderTimer);
+        if (recordingCycleTimerRef.current) {
+          clearInterval(recordingCycleTimerRef.current);
+          recordingCycleTimerRef.current = null;
+        }
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
           try { mediaRecorderRef.current.stop(); } catch (e) {}
           mediaRecorderRef.current = null;
@@ -195,31 +227,19 @@ const CameraFeedCell: React.FC<{
     const getRollingVideoBase64 = async (): Promise<string | null> => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         try {
-          mediaRecorderRef.current.requestData();
-        } catch (e) {}
-      }
-      await new Promise((r) => setTimeout(r, 60));
-
-      const allChunks: Blob[] = [];
-      if (headerChunkRef.current) {
-        allChunks.push(headerChunkRef.current);
-      }
-      if (videoChunksRef.current && videoChunksRef.current.length > 0) {
-        for (const chunk of videoChunksRef.current) {
-          if (chunk !== headerChunkRef.current) {
-            allChunks.push(chunk);
-          }
-        }
+          mediaRecorderRef.current.stop();
+        } catch {}
+        await new Promise((r) => setTimeout(r, 120));
       }
 
-      if (allChunks.length === 0) return null;
+      const targetBlob = lastFinalizedVideoRef.current || (recordedBlobsRef.current.length > 0 ? recordedBlobsRef.current[recordedBlobsRef.current.length - 1] : null);
+      if (!targetBlob || targetBlob.size < 1000) return null;
 
-      const mimeType = mediaRecorderRef.current?.mimeType || 'video/webm';
-      const blob = new Blob(allChunks, { type: mimeType });
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result as string);
-        reader.readAsDataURL(blob);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(targetBlob);
       });
     };
 
@@ -345,24 +365,22 @@ const CameraFeedCell: React.FC<{
                 if (data.alert_created && data.new_alert) {
                   window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', { detail: data.new_alert }));
                   // Capture rolling video clip of tamper incident and persist to evidence
-                  if (videoChunksRef.current && videoChunksRef.current.length > 0) {
-                    getRollingVideoBase64().then((vidB64) => {
-                      if (vidB64) {
-                        fetch(`${getApiBaseUrl()}/alerts/${data.new_alert.id}/video`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ video_base64: vidB64 })
-                        }).then(async (vRes) => {
-                          if (vRes.ok) {
-                            const vData = await vRes.json();
-                            window.dispatchEvent(new CustomEvent('border_vision_alert_video_updated', {
-                              detail: { id: data.new_alert.id, videoUrl: vData.video_url }
-                            }));
-                          }
-                        }).catch(() => {});
-                      }
-                    }).catch(() => {});
-                  }
+                  getRollingVideoBase64().then((vidB64) => {
+                    if (vidB64) {
+                      fetch(`${getApiBaseUrl()}/alerts/${data.new_alert.id}/video`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ video_base64: vidB64 })
+                      }).then(async (vRes) => {
+                        if (vRes.ok) {
+                          const vData = await vRes.json();
+                          window.dispatchEvent(new CustomEvent('border_vision_alert_video_updated', {
+                            detail: { id: data.new_alert.id, videoUrl: vData.video_url }
+                          }));
+                        }
+                      }).catch(() => {});
+                    }
+                  }).catch(() => {});
                 }
                 return;
               } else {
@@ -380,24 +398,22 @@ const CameraFeedCell: React.FC<{
                 if (data.alert_created && data.new_alert) {
                   window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', { detail: data.new_alert }));
                   // Asynchronously upload recorded video clip in background without blocking frame detection
-                  if (videoChunksRef.current && videoChunksRef.current.length > 0) {
-                    getRollingVideoBase64().then((vidB64) => {
-                      if (vidB64) {
-                        fetch(`${getApiBaseUrl()}/alerts/${data.new_alert.id}/video`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ video_base64: vidB64 })
-                        }).then(async (vRes) => {
-                          if (vRes.ok) {
-                            const vData = await vRes.json();
-                            window.dispatchEvent(new CustomEvent('border_vision_alert_video_updated', {
-                              detail: { id: data.new_alert.id, videoUrl: vData.video_url }
-                            }));
-                          }
-                        }).catch(() => {});
-                      }
-                    }).catch(() => {});
-                  }
+                  getRollingVideoBase64().then((vidB64) => {
+                    if (vidB64) {
+                      fetch(`${getApiBaseUrl()}/alerts/${data.new_alert.id}/video`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ video_base64: vidB64 })
+                      }).then(async (vRes) => {
+                        if (vRes.ok) {
+                          const vData = await vRes.json();
+                          window.dispatchEvent(new CustomEvent('border_vision_alert_video_updated', {
+                            detail: { id: data.new_alert.id, videoUrl: vData.video_url }
+                          }));
+                        }
+                      }).catch(() => {});
+                    }
+                  }).catch(() => {});
                 }
                 return;
               }
@@ -565,7 +581,7 @@ const CameraFeedCell: React.FC<{
               const labelText = isMatch 
                 ? `MATCH: ${matchName.toUpperCase()} (${matchScore}%)`
                 : `${(det.class || 'PERSON').toUpperCase()} (${classScore}%)`;
-              const color = isMatch ? '#ff3333' : '#ff4d4d';
+              const color = isMatch ? '#ff3333' : '#38bdf8';
 
               return (
                 <g key={idx}>
@@ -575,10 +591,10 @@ const CameraFeedCell: React.FC<{
                     y={y}
                     width={w}
                     height={h}
-                    fill={isMatch ? 'rgba(255, 51, 51, 0.20)' : 'rgba(255, 80, 80, 0.12)'}
+                    fill={isMatch ? 'rgba(255, 51, 51, 0.20)' : 'rgba(56, 189, 248, 0.08)'}
                     stroke={color}
-                    strokeWidth="3"
-                    className="animate-pulse"
+                    strokeWidth="2.5"
+                    className={isMatch ? "animate-pulse" : ""}
                   />
                   {/* Bounding box corner ticks */}
                   <path
