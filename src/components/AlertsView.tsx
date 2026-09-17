@@ -174,22 +174,21 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     return () => window.removeEventListener('border_vision_alert_video_updated', handleVideoUpdated);
   }, [activeAlert?.id]);
 
+  const hasRealVideo = (v?: string | null, alertId?: string): boolean => {
+    if (!v) return false;
+    if (v.includes('ALRT-0EEA47.mp4') && alertId !== 'ALRT-0EEA47') return false;
+    return (
+      v.endsWith('.mp4') ||
+      v.endsWith('.webm') ||
+      v.startsWith('data:video/') ||
+      v.includes('/evidence/videos/')
+    );
+  };
+
   const rawVideoUrl = 
-    (activeAlert?.videoUrl && (
-      activeAlert.videoUrl.endsWith('.mp4') ||
-      activeAlert.videoUrl.endsWith('.webm') ||
-      activeAlert.videoUrl.startsWith('data:video/') ||
-      activeAlert.videoUrl.includes('/evidence/videos/')
-    ) ? activeAlert.videoUrl : '') ||
-    (activeAlert?.imageUrl && (
-      activeAlert.imageUrl.endsWith('.mp4') ||
-      activeAlert.imageUrl.endsWith('.webm') ||
-      activeAlert.imageUrl.startsWith('data:video/') ||
-      activeAlert.imageUrl.includes('/evidence/videos/')
-    ) ? activeAlert.imageUrl : '') ||
-    (activeAlert?.cameraCode === 'CAM-ANALYSIS'
-      ? '/uploads/14266560_3840_2160_30fps.mp4'
-      : '/evidence/videos/ALRT-0EEA47.mp4');
+    (hasRealVideo(activeAlert?.videoUrl, activeAlert?.id) ? activeAlert?.videoUrl : '') ||
+    (hasRealVideo(activeAlert?.imageUrl, activeAlert?.id) ? activeAlert?.imageUrl : '') ||
+    (activeAlert?.cameraCode === 'CAM-ANALYSIS' ? '/uploads/14266560_3840_2160_30fps.mp4' : '');
 
   const resolvedVideoUrl = resolveMediaUrl(rawVideoUrl);
 
@@ -246,14 +245,26 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     return () => clearInterval(interval);
   }, [isPlaying]);
 
-  // Select alert and show captured incident video playback if video exists, otherwise show real captured frame
+  // Select alert: For biometric watchlist matches or webcam alerts, default to real captured frame (photo)
   useEffect(() => {
     if (activeAlert?.id) {
       setLockedAlertId(activeAlert.id);
       const hasVid = hasVideoClip(activeAlert);
-      setViewMode(hasVid ? 'video' : 'photo');
-      setIsPlaying(hasVid);
+      const isBiometricOrWebcam =
+        activeAlert.title?.toUpperCase().includes('MATCH') ||
+        activeAlert.title?.toUpperCase().includes('BIOMETRIC') ||
+        activeAlert.category === 'PERSONNEL' ||
+        activeAlert.cameraCode?.startsWith('CAM-LIVE');
+
+      if (isBiometricOrWebcam || !hasVid) {
+        setViewMode('photo');
+        setIsPlaying(false);
+      } else {
+        setViewMode('video');
+        setIsPlaying(true);
+      }
       setVideoProgress(0);
+      setVideoLoadError(false);
     }
   }, [activeAlert?.id]);
 
@@ -304,13 +315,8 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
   const hasVideoClip = (alert: TacticalAlert | null | undefined): boolean => {
     if (!alert) return false;
-    const v = alert.videoUrl || '';
-    const img = alert.imageUrl || '';
-    return Boolean(
-      (v && (v.endsWith('.mp4') || v.endsWith('.webm') || v.startsWith('data:video/') || v.includes('/evidence/videos/'))) ||
-      (img && (img.endsWith('.mp4') || img.endsWith('.webm') || img.startsWith('data:video/') || img.includes('/evidence/videos/'))) ||
-      alert.cameraCode === 'CAM-ANALYSIS'
-    );
+    if (alert.cameraCode === 'CAM-ANALYSIS') return true;
+    return hasRealVideo(alert.videoUrl, alert.id) || hasRealVideo(alert.imageUrl, alert.id);
   };
 
   const isSuspiciousAlert = (alert: TacticalAlert | null | undefined): boolean => {
@@ -962,24 +968,30 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   </button>
                   <button
                     onClick={() => {
-                      setViewMode('video');
-                      setIsPlaying(hasVideoClip(activeAlert));
+                      if (hasVideoClip(activeAlert)) {
+                        setViewMode('video');
+                        setIsPlaying(true);
+                      }
                     }}
+                    disabled={!hasVideoClip(activeAlert)}
                     className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase transition-colors flex items-center gap-1.5 ${
                       viewMode === 'video'
                         ? 'bg-[#4d8eff] text-[#00285d]'
-                        : 'text-[#c2c6d6] hover:text-white'
+                        : hasVideoClip(activeAlert)
+                          ? 'text-[#c2c6d6] hover:text-white'
+                          : 'text-[#5a6070] cursor-not-allowed opacity-40'
                     }`}
+                    title={hasVideoClip(activeAlert) ? 'Switch to Incident Video' : 'No recorded video clip available for this alert'}
                   >
                     <span className="material-symbols-outlined text-[14px]">videocam</span>
-                    Video Playback
+                    {hasVideoClip(activeAlert) ? 'Video Playback' : 'No Video Clip'}
                   </button>
                 </div>
               </div>
 
-              {/* Controls Toolbar: Render Video Controls if video exists, or Forensic Snapshot Toolbar if no video */}
+              {/* Controls Toolbar: Render Video Controls if in video mode and video exists, or Forensic Snapshot Toolbar */}
               <div className="p-4 bg-[#131c2a] border-t border-[#424754]/20 flex flex-col gap-3">
-                {hasVideoClip(activeAlert) ? (
+                {viewMode === 'video' && hasVideoClip(activeAlert) ? (
                   <div className="flex justify-between items-center">
                     {/* Playback Navigation: 3 Square Icon Buttons ([ || ] [ ↺ ] [ ↻ ]) */}
                     <div className="flex items-center gap-2">
@@ -1054,7 +1066,18 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                       </span>
                     </div>
                     <button
-                      onClick={() => onDownloadEvidence(activeAlert)}
+                      onClick={() => {
+                        if (candidatePhotoUrl && !candidatePhotoUrl.startsWith('data:image/svg')) {
+                          const a = document.createElement('a');
+                          a.href = candidatePhotoUrl;
+                          a.download = `${activeAlert.id}_forensic_frame.jpg`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                        } else {
+                          onDownloadEvidence(activeAlert);
+                        }
+                      }}
                       className="flex items-center gap-2 px-3.5 py-2 bg-[#222a39] hover:bg-[#2c3544] text-[#adc6ff] hover:text-white rounded-lg text-[12px] font-mono font-bold uppercase transition-colors border border-[#adc6ff]/30 shadow-sm"
                     >
                       <span className="material-symbols-outlined text-[16px]">download</span>

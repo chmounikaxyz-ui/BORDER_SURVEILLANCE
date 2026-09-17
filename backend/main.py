@@ -88,6 +88,16 @@ def ensure_sample_videos():
     except Exception as e:
         print(f"[BorderVision] Warning during sample video seeding: {e}")
 
+    try:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE alerts SET video_url = NULL WHERE video_url LIKE '%ALRT-0EEA47.mp4%' AND id != 'ALRT-0EEA47'"
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[BorderVision] Warning during legacy alert cleanup: {e}")
+
 
 # ─── Watchlist Memory Cache & Feature Store ─────────────────────────────────────
 _WATCHLIST_PERSONS_CACHE = None
@@ -586,16 +596,22 @@ def get_alerts():
         # Check if an evidence video clip or source surveillance footage exists for this alert
         vid_webm = EVIDENCE_VIDEOS_DIR / f"{alert_id}.webm"
         vid_mp4 = EVIDENCE_VIDEOS_DIR / f"{alert_id}.mp4"
+        raw_vid = str(d.get("video_url") or "").strip()
+        if "ALRT-0EEA47.mp4" in raw_vid and alert_id != "ALRT-0EEA47":
+            raw_vid = ""
+
         if vid_mp4.exists():
             d["videoUrl"] = f"/evidence/videos/{alert_id}.mp4"
         elif vid_webm.exists():
             d["videoUrl"] = f"/evidence/videos/{alert_id}.webm"
-        elif d.get("video_url") and str(d["video_url"]).strip() and not str(d["video_url"]).strip().endswith(".jpg"):
-            d["videoUrl"] = str(d["video_url"]).strip()
-        elif raw_img and (raw_img.endswith(".mp4") or raw_img.endswith(".webm") or raw_img.startswith("data:video/") or "/evidence/videos/" in raw_img):
+        elif raw_vid and not raw_vid.endswith(".jpg"):
+            d["videoUrl"] = raw_vid
+        elif raw_img and (raw_img.endswith(".mp4") or raw_img.endswith(".webm") or raw_img.startswith("data:video/")) and "ALRT-0EEA47.mp4" not in raw_img:
             d["videoUrl"] = raw_img
+        elif d.get("camera_code") == "CAM-ANALYSIS" or d.get("cameraCode") == "CAM-ANALYSIS":
+            d["videoUrl"] = "/uploads/14266560_3840_2160_30fps.mp4"
         else:
-            d["videoUrl"] = "/evidence/videos/ALRT-0EEA47.mp4"
+            d["videoUrl"] = None
         
         # Ensure confidence is 100% synchronized with title percentage if biometric match
         title_str = d.get("title", "")
@@ -2239,7 +2255,7 @@ def detect_live_frame(body: FrameDetectRequest):
                         print("[Tamper Video Evidence Save Error]:", verr)
 
                 if not saved_video_url:
-                    saved_video_url = "/evidence/videos/ALRT-0EEA47.mp4"
+                    saved_video_url = None
 
                 conn = get_conn()
                 now_dt = datetime.now(timezone.utc)
@@ -2617,7 +2633,7 @@ def detect_live_frame(body: FrameDetectRequest):
                             print("[Video Evidence Save Error]:", verr)
 
                     if not saved_video_url:
-                        saved_video_url = "/evidence/videos/ALRT-0EEA47.mp4"
+                        saved_video_url = None
 
                     # Prioritize video replay URL for rich video playback, with image fallback
                     real_photo = (body.image_base64 if body.image_base64 and body.image_base64.startswith("data:") else None) or captured_b64
