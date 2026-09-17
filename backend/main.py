@@ -314,8 +314,8 @@ def process_sample_video(background_tasks: BackgroundTasks):
             status_code=404,
             detail="No sample video found on server. Please upload an MP4 video or check backend/samples."
         )
-    # Prefer lightweight CCTV sample video for fast, memory-safe execution on cloud/Render
-    sample = next((p for p in mp4s if "cctv_surveillance" in p.name), mp4s[0])
+    # Choose surveillance sample with real vehicle and target movement for live alerts
+    sample = next((p for p in mp4s if "14266560" in p.name or "highway" in p.name), mp4s[0])
     sample_path = str(sample)
 
     job_id = f"job-{uuid.uuid4().hex[:8]}"

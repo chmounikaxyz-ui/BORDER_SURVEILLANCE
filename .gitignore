@@ -39,4 +39,5 @@ backend/models/*.pt
 
 # Whitelist lightweight models needed for deployment
 !backend/yolov8n.pt
+!yolov8n.pt
 !backend/models/*.onnx
