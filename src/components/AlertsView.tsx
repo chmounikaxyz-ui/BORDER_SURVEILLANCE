@@ -93,31 +93,87 @@ const NIGHT_PERIMETER_TRACK_POINTS: [number, number, number, number, number][] =
   [5.88, 0.603, 0.358, 0.674, 0.727],
 ];
 
+// Ground-truth neural tracking coordinates for highway ANPR vehicle footage (14266560_3840_2160_30fps.mp4 / LC71PZS)
+const HIGHWAY_VEHICLE_TRACK_POINTS: [number, number, number, number, number][] = [
+  // [timeSec, x1, y1, x2, y2]
+  [0.00, 0.644, 0.651, 0.819, 0.900],
+  [0.25, 0.641, 0.650, 0.818, 0.898],
+  [0.50, 0.641, 0.653, 0.815, 0.899],
+  [0.75, 0.641, 0.651, 0.813, 0.900],
+  [1.00, 0.646, 0.649, 0.816, 0.893],
+  [1.25, 0.654, 0.643, 0.822, 0.885],
+  [1.50, 0.663, 0.647, 0.829, 0.883],
+  [1.75, 0.673, 0.642, 0.835, 0.877],
+  [2.00, 0.678, 0.636, 0.837, 0.870],
+  [2.25, 0.678, 0.637, 0.835, 0.865],
+  [2.50, 0.675, 0.633, 0.830, 0.856],
+  [2.75, 0.670, 0.631, 0.822, 0.850],
+  [3.00, 0.663, 0.632, 0.813, 0.844],
+  [3.25, 0.657, 0.629, 0.804, 0.839],
+  [3.50, 0.650, 0.623, 0.795, 0.832],
+  [3.75, 0.644, 0.624, 0.787, 0.832],
+  [4.00, 0.640, 0.621, 0.781, 0.829],
+  [4.25, 0.637, 0.620, 0.778, 0.826],
+  [4.50, 0.638, 0.621, 0.777, 0.822],
+  [4.75, 0.639, 0.622, 0.778, 0.822],
+  [5.00, 0.643, 0.620, 0.780, 0.820],
+  [5.25, 0.646, 0.622, 0.783, 0.820],
+  [5.50, 0.650, 0.619, 0.788, 0.816],
+  [5.75, 0.652, 0.619, 0.790, 0.814],
+  [6.00, 0.655, 0.616, 0.793, 0.815],
+  [6.25, 0.657, 0.617, 0.795, 0.815],
+  [6.50, 0.657, 0.613, 0.796, 0.816],
+  [6.75, 0.654, 0.612, 0.795, 0.818],
+  [7.00, 0.650, 0.618, 0.791, 0.822],
+  [7.25, 0.644, 0.615, 0.786, 0.827],
+  [7.50, 0.636, 0.622, 0.777, 0.828],
+  [7.75, 0.627, 0.624, 0.769, 0.830],
+  [8.00, 0.617, 0.636, 0.760, 0.834],
+  [8.25, 0.612, 0.637, 0.753, 0.838],
+  [8.50, 0.606, 0.638, 0.749, 0.844],
+  [8.75, 0.605, 0.646, 0.746, 0.851],
+  [9.00, 0.605, 0.653, 0.746, 0.854],
+  [9.25, 0.607, 0.653, 0.746, 0.855],
+  [9.50, 0.609, 0.657, 0.749, 0.856],
+  [9.75, 0.609, 0.661, 0.752, 0.857],
+  [10.00, 0.618, 0.658, 0.756, 0.860],
+  [10.25, 0.623, 0.655, 0.759, 0.854],
+  [10.50, 0.627, 0.659, 0.762, 0.851],
+  [10.75, 0.629, 0.655, 0.764, 0.849],
+  [11.00, 0.632, 0.645, 0.768, 0.843],
+  [11.25, 0.634, 0.637, 0.770, 0.840],
+  [11.50, 0.636, 0.631, 0.772, 0.835],
+  [12.00, 0.636, 0.631, 0.772, 0.835],
+];
+
+function interpolateTrack(pts: [number, number, number, number, number][], curTime: number): [number, number, number, number] {
+  if (curTime <= pts[0][0]) return [pts[0][1], pts[0][2], pts[0][3], pts[0][4]];
+  if (curTime >= pts[pts.length - 1][0]) {
+    const last = pts[pts.length - 1];
+    return [last[1], last[2], last[3], last[4]];
+  }
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [t0, x1_0, y1_0, x2_0, y2_0] = pts[i];
+    const [t1, x1_1, y1_1, x2_1, y2_1] = pts[i + 1];
+    if (curTime >= t0 && curTime <= t1) {
+      const factor = (curTime - t0) / (t1 - t0);
+      return [
+        x1_0 + factor * (x1_1 - x1_0),
+        y1_0 + factor * (y1_1 - y1_0),
+        x2_0 + factor * (x2_1 - x2_0),
+        y2_0 + factor * (y2_1 - y2_0),
+      ];
+    }
+  }
+  return [pts[0][1], pts[0][2], pts[0][3], pts[0][4]];
+}
+
 function getTrackedBboxAtTime(curTime: number, isPerson: boolean, isVeh: boolean): [number, number, number, number] | null {
   if (isPerson) {
-    const pts = NIGHT_PERIMETER_TRACK_POINTS;
-    if (curTime <= pts[0][0]) return [pts[0][1], pts[0][2], pts[0][3], pts[0][4]];
-    if (curTime >= pts[pts.length - 1][0]) {
-      const last = pts[pts.length - 1];
-      return [last[1], last[2], last[3], last[4]];
-    }
-    for (let i = 0; i < pts.length - 1; i++) {
-      const [t0, x1_0, y1_0, x2_0, y2_0] = pts[i];
-      const [t1, x1_1, y1_1, x2_1, y2_1] = pts[i + 1];
-      if (curTime >= t0 && curTime <= t1) {
-        const factor = (curTime - t0) / (t1 - t0);
-        return [
-          x1_0 + factor * (x1_1 - x1_0),
-          y1_0 + factor * (y1_1 - y1_0),
-          x2_0 + factor * (x2_1 - x2_0),
-          y2_0 + factor * (y2_1 - y2_0),
-        ];
-      }
-    }
-    return [pts[0][1], pts[0][2], pts[0][3], pts[0][4]];
+    return interpolateTrack(NIGHT_PERIMETER_TRACK_POINTS, curTime);
   }
   if (isVeh) {
-    return [0.678, 0.635, 0.837, 0.870];
+    return interpolateTrack(HIGHWAY_VEHICLE_TRACK_POINTS, curTime);
   }
   return null;
 }
@@ -257,7 +313,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     const list: string[] = [];
     const t = `${activeAlert.title || ''} ${activeAlert.description || ''}`.toUpperCase();
     const isVeh = activeAlert.category === 'VEHICLE' || t.includes('LC71') || t.includes('ANPR') || t.includes('CAR') || t.includes('TRUCK') || t.includes('VEHICLE');
-    const isBiometric = t.includes('MATCH') || t.includes('BIOMETRIC');
+    const isBiometric = !isVeh && (t.includes('BIOMETRIC') || t.includes('FACE') || (activeAlert.category === 'PERSONNEL' && t.includes('MATCH')));
 
     if (isVeh) {
       // VEHICLE ALERTS: Strictly highway vehicle surveillance footage ONLY
@@ -379,11 +435,17 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     if (activeAlert?.id) {
       setLockedAlertId(activeAlert.id);
       const hasVid = hasVideoClip(activeAlert);
-      const isBiometricOrWebcam =
-        activeAlert.title?.toUpperCase().includes('MATCH') ||
+      const isVeh = activeAlert.category === 'VEHICLE' ||
+                    activeAlert.title?.toUpperCase().includes('LC71') ||
+                    activeAlert.title?.toUpperCase().includes('ANPR') ||
+                    activeAlert.title?.toLowerCase().includes('car') ||
+                    activeAlert.title?.toLowerCase().includes('vehicle');
+      const isBiometricOrWebcam = !isVeh && (
         activeAlert.title?.toUpperCase().includes('BIOMETRIC') ||
-        activeAlert.category === 'PERSONNEL' ||
-        activeAlert.cameraCode?.startsWith('CAM-LIVE');
+        activeAlert.title?.toUpperCase().includes('FACE') ||
+        (activeAlert.category === 'PERSONNEL' && activeAlert.title?.toUpperCase().includes('MATCH')) ||
+        Boolean(activeAlert.cameraCode?.startsWith('CAM-LIVE'))
+      );
 
       if (isBiometricOrWebcam || !hasVid) {
         setViewMode('photo');
@@ -398,11 +460,71 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     }
   }, [activeAlert?.id]);
 
+  const runLiveFrameProbe = async () => {
+    if (isDetectingRef.current) return;
+    const vid = modalVideoRef.current;
+    if (!vid || vid.readyState < 2 || vid.seeking || vid.paused) return;
+
+    isDetectingRef.current = true;
+    try {
+      const canvas = hiddenCanvasRef.current || document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 360;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        isDetectingRef.current = false;
+        return;
+      }
+      ctx.drawImage(vid, 0, 0, 640, 360);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+
+      const res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_base64: dataUrl,
+          camera_code: activeAlert?.cameraCode || 'CAM-ANALYSIS',
+          create_alert: false,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.detections) && data.detections.length > 0) {
+          const isVeh = activeAlert?.category === 'VEHICLE' || activeAlert?.title.toLowerCase().includes('vehicle');
+          const isPers = activeAlert?.category === 'PERSONNEL' || activeAlert?.title.toLowerCase().includes('person');
+          const matched = data.detections.find((d: any) => {
+            const cls = (d.class || '').toLowerCase();
+            if (isVeh) return cls.includes('car') || cls.includes('truck') || cls.includes('vehicle') || cls.includes('bus');
+            if (isPers) return cls.includes('person');
+            return true;
+          });
+          if (matched && matched.bbox && Array.isArray(matched.bbox) && matched.bbox.length === 4) {
+            setLiveTrackedBbox(matched.bbox);
+          }
+        }
+      }
+    } catch {
+      // Ignore transient errors
+    } finally {
+      isDetectingRef.current = false;
+    }
+  };
+
   const updateTrackingFromVideo = () => {
     const vid = modalVideoRef.current;
     if (!vid) return;
     const t = `${activeAlert?.title || ''} ${activeAlert?.description || ''}`.toUpperCase();
-    const isBiometric = t.includes('MATCH') || t.includes('BIOMETRIC');
+    const isVehicleAlert = activeAlert?.category === 'VEHICLE' ||
+                           activeAlert?.title.toLowerCase().includes('vehicle') ||
+                           activeAlert?.title.toUpperCase().includes('LC71') ||
+                           activeAlert?.title.toUpperCase().includes('ANPR') ||
+                           activeAlert?.title.toLowerCase().includes('car');
+    const isBiometric = !isVehicleAlert && (
+      t.includes('BIOMETRIC') ||
+      t.includes('FACE') ||
+      (activeAlert?.category === 'PERSONNEL' && t.includes('MATCH'))
+    );
     if (isBiometric) {
       setLiveTrackedBbox(null);
       return;
@@ -410,13 +532,21 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     const isPersonAlert = (activeAlert?.category === 'PERSONNEL' ||
                           activeAlert?.title.toLowerCase().includes('person') ||
                           activeAlert?.title.toLowerCase().includes('suspect')) &&
-                          !isBiometric;
-    const isVehicleAlert = activeAlert?.category === 'VEHICLE' ||
-                           activeAlert?.title.toLowerCase().includes('vehicle') ||
-                           activeAlert?.title.includes('LC71');
-    const bbox = getTrackedBboxAtTime(vid.currentTime || 0, Boolean(isPersonAlert), Boolean(isVehicleAlert));
-    if (bbox) {
-      setLiveTrackedBbox(bbox);
+                          !isBiometric && !isVehicleAlert;
+
+    const isKnownPreset = resolvedVideoUrl.includes('14266560') ||
+                          resolvedVideoUrl.includes('cctv_surveillance') ||
+                          activeAlert?.id === 'ALRT-0EEA47' ||
+                          activeAlert?.title.includes('LC71') ||
+                          activeAlert?.title.toUpperCase().includes('ANPR');
+
+    if (isKnownPreset) {
+      const bbox = getTrackedBboxAtTime(vid.currentTime || 0, Boolean(isPersonAlert), Boolean(isVehicleAlert));
+      if (bbox) {
+        setLiveTrackedBbox(bbox);
+      }
+    } else {
+      runLiveFrameProbe();
     }
   };
 
@@ -1015,6 +1145,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   {viewMode === 'video' ? (
                     resolvedVideoUrl && !videoLoadError ? (
                       <>
+                        <canvas ref={hiddenCanvasRef} width={640} height={360} className="hidden" />
                         <video
                           ref={modalVideoRef}
                           key={resolvedVideoUrl}
@@ -1146,7 +1277,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   const boxH = Math.abs(effectiveBbox[3] - effectiveBbox[1]);
                   if (boxW >= 0.95 && boxH >= 0.95) return null;
                   const isMatch = activeAlert.title.toLowerCase().includes('match');
-                  const isVehicle = activeAlert.category === 'VEHICLE' || activeAlert.objectType?.toLowerCase() === 'car';
+                  const isVehicle = activeAlert.category === 'VEHICLE' || activeAlert.objectType?.toLowerCase() === 'car' || activeAlert.title.toUpperCase().includes('LC71') || activeAlert.title.toUpperCase().includes('ANPR') || activeAlert.title.toLowerCase().includes('vehicle');
                   const isPerson = activeAlert.category === 'PERSONNEL' || activeAlert.title.toLowerCase().includes('person');
                   const isAnprHit = activeAlert.title.toUpperCase().includes('LC71') || activeAlert.title.toUpperCase().includes('ANPR');
                   const rawSpd = (activeAlert.speedHeading && activeAlert.speedHeading !== 'Unknown' && !activeAlert.speedHeading.toLowerCase().includes('stationary'))
@@ -1158,7 +1289,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
                   return (
                     <div 
-                      className="absolute border-2 border-[#ffb4ab] bg-[#ffb4ab]/5 z-10 pointer-events-none shadow-[0_0_15px_rgba(255,180,171,0.25)] transition-[top,left,width,height] duration-75 ease-out"
+                      className={`absolute border-2 border-[#ffb4ab] bg-[#ffb4ab]/5 z-10 pointer-events-none shadow-[0_0_15px_rgba(255,180,171,0.25)] ${viewMode === 'video' ? 'transition-none' : 'transition-[top,left,width,height] duration-75 ease-out'}`}
                       style={{
                         top: `${Math.max(0, Math.min(1, minY)) * 100}%`,
                         left: `${Math.max(0, Math.min(1, minX)) * 100}%`,

@@ -121,18 +121,31 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     return () => clearInterval(interval);
   }, [videoPreviewUrl, job?.status, displayMode, runFrameDetection]);
 
-  // ── Poll job status while running (fast 500ms updates) ──────────────────────
+  // ── Poll job status while running (fast 350ms updates) ──────────────────────
   useEffect(() => {
-    const shouldPoll = job?.status === 'queued' || job?.status === 'running';
-    if (shouldPoll && !pollRef.current) {
-      pollRef.current = setInterval(async () => {
-        const status = await getVideoStatus(job?.job_id);
+    const currentJobId = job?.job_id;
+    const shouldPoll = Boolean(currentJobId && (job?.status === 'queued' || job?.status === 'running'));
+
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+
+    if (!shouldPoll || !currentJobId) {
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const status = await getVideoStatus(currentJobId);
         if (status) {
           setJob(status);
-          if (status.status === 'complete' || status.status === 'error') {
-            clearInterval(pollRef.current!);
-            pollRef.current = null;
-            if (status.alerts_generated > 0) {
+          if (status.status === 'complete' || status.status === 'error' || status.status === 'cancelled') {
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            if (status.status === 'complete' && status.alerts_generated > 0) {
               onAlertsGenerated?.(status.alerts_generated);
               window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', {
                 detail: {
@@ -144,15 +157,21 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
             }
           }
         }
-      }, 500);
-    }
+      } catch (err) {
+        console.warn('[VideoProcessor] Polling error:', err);
+      }
+    };
+
+    poll();
+    pollRef.current = setInterval(poll, 350);
+
     return () => {
-      if (!shouldPoll && pollRef.current) {
+      if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
     };
-  }, [job?.status]);
+  }, [job?.job_id, job?.status]);
 
   // ── Drag-and-drop handlers ────────────────────────────────────────────────
   const handleDrag = useCallback((e: React.DragEvent) => {

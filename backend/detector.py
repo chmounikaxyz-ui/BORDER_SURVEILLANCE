@@ -529,6 +529,7 @@ class DetectionEngine:
         track_history: Dict[int, tuple] = {}
         track_class_votes: Dict[int, Dict[int, int]] = {}
         track_plates: Dict[int, str] = {}
+        track_persons: Dict[int, tuple] = {}
         alerted_tracks: set = set()
         alerted_plates: set = set()
         scanned_track_attempts: Dict[int, int] = {}
@@ -537,11 +538,12 @@ class DetectionEngine:
         alert_summaries: list = []
 
         # High-performance adaptive stride:
-        # >200 frames (e.g. Highway ANPR 348 frames): stride 5 (~70 inferences, ~4-5s total)
-        # >80 frames: stride 4
-        # >40 frames: stride 2
+        # >300 frames (e.g. Highway ANPR 4K 348 frames): stride 12 (~29 inferences, ~10s total)
+        # >150 frames: stride 8
+        # >60 frames: stride 5
+        # >30 frames: stride 2
         # else: stride 1
-        stride = 5 if total_frames > 200 else (4 if total_frames > 80 else (2 if total_frames > 40 else 1))
+        stride = 12 if total_frames > 300 else (8 if total_frames > 150 else (5 if total_frames > 60 else (2 if total_frames > 30 else 1)))
 
         try:
             while True:
@@ -570,6 +572,12 @@ class DetectionEngine:
                         )
                     continue
 
+                # Fast cooperative cancellation check before reading frame
+                if get_active_job() != job_id:
+                    print(f"[Detector] Job {job_id} cancelled (superseded by new job).")
+                    _update_job(job_id, status="cancelled")
+                    return
+
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     break
@@ -579,7 +587,7 @@ class DetectionEngine:
                 scale = target_w / float(fw) if fw > target_w else 1.0
                 infer_frame = cv2.resize(frame, (target_w, int(fh * scale))) if scale != 1.0 else frame.copy()
 
-                # Run persistent multi-object tracking in torch.inference_mode()
+                # Run persistent multi-object tracking in torch.inference_mode() with fast bytetrack
                 results = None
                 try:
                     import torch
@@ -587,9 +595,10 @@ class DetectionEngine:
                         results = model.track(
                             infer_frame,
                             persist=True,
+                            tracker="bytetrack.yaml",
                             classes=TARGET_CLASSES,
                             conf=0.25,
-                            imgsz=256,
+                            imgsz=192,
                             verbose=False,
                         )
                 except Exception as track_err:
@@ -600,7 +609,7 @@ class DetectionEngine:
                                 infer_frame,
                                 classes=TARGET_CLASSES,
                                 conf=0.25,
-                                imgsz=256,
+                                imgsz=192,
                                 verbose=False,
                             )
                     except Exception:
@@ -847,30 +856,38 @@ class DetectionEngine:
                     matched_person = None
                     person_sim = 0
                     if cls == 0:
-                        crop = frame[max(0, orig_y1):min(fh, orig_y2), max(0, orig_x1):min(fw, orig_x2)]
-                        if crop.size > 0:
-                            try:
-                                from face_engine import get_face_engine
-                                fe = get_face_engine()
-                                persons_db = get_cached_watchlist_persons()
-                                item_emb = fe.extract_128d_embedding(crop)
-                                best_match = None
-                                best_sim = 0
-                                for p in persons_db:
-                                    p_b64 = p.get("photo_base64")
-                                    if not p_b64:
-                                        continue
-                                    ref_emb = fe.get_reference_embedding(p_b64)
-                                    if ref_emb is not None:
-                                        s = fe.compute_similarity(item_emb, ref_emb) if item_emb is not None else fe.compute_similarity(crop, ref_emb)
-                                        if s > best_sim:
-                                            best_sim = s
-                                            best_match = p
-                                if best_sim >= 45 and best_match:
-                                    matched_person = best_match
-                                    person_sim = best_sim
-                            except Exception as f_err:
-                                pass
+                        scan_count = scanned_track_attempts.get(track_id, 0) if track_id is not None else 0
+                        if scan_count < 2:
+                            if track_id is not None:
+                                scanned_track_attempts[track_id] = scan_count + 1
+                            crop = frame[max(0, orig_y1):min(fh, orig_y2), max(0, orig_x1):min(fw, orig_x2)]
+                            if crop.size > 0:
+                                try:
+                                    from face_engine import get_face_engine
+                                    fe = get_face_engine()
+                                    persons_db = get_cached_watchlist_persons()
+                                    item_emb = fe.extract_128d_embedding(crop)
+                                    best_match = None
+                                    best_sim = 0
+                                    for p in persons_db:
+                                        p_b64 = p.get("photo_base64")
+                                        if not p_b64:
+                                            continue
+                                        ref_emb = fe.get_reference_embedding(p_b64)
+                                        if ref_emb is not None:
+                                            s = fe.compute_similarity(item_emb, ref_emb) if item_emb is not None else fe.compute_similarity(crop, ref_emb)
+                                            if s > best_sim:
+                                                best_sim = s
+                                                best_match = p
+                                    if best_sim >= 45 and best_match:
+                                        matched_person = best_match
+                                        person_sim = best_sim
+                                        if track_id is not None:
+                                            track_persons[track_id] = (matched_person, person_sim)
+                                except Exception as f_err:
+                                    pass
+                        elif track_id is not None and track_id in track_persons:
+                            matched_person, person_sim = track_persons[track_id]
 
                     is_watchlist_match = matched_person is not None
 

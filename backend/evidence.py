@@ -84,8 +84,13 @@ def save_evidence_video(
         return None
 
     try:
-        import shutil
-        shutil.copyfile(str(source_video_path), str(out_path))
+        if not out_path.exists():
+            import os
+            try:
+                os.link(str(source_video_path), str(out_path))
+            except Exception:
+                import shutil
+                shutil.copyfile(str(source_video_path), str(out_path))
         if out_path.exists() and out_path.stat().st_size > 0:
             return f"/evidence/videos/{out_filename}"
     except Exception as exc:

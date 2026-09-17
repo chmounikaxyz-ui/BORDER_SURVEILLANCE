@@ -32,7 +32,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 from data import CAMERAS_DATA
 from database import get_conn, init_db
-from detector import DetectionEngine, _ensure_lap_solver
+from detector import DetectionEngine, _ensure_lap_solver, set_active_job
 _ensure_lap_solver()
 from models import (AlertStatusUpdate, VideoJobRequest,
                     WatchlistPersonCreate, WatchlistVehicleCreate,
@@ -335,6 +335,7 @@ def process_video(req: VideoJobRequest, background_tasks: BackgroundTasks):
     engine.stop_all_jobs()
 
     job_id = f"job-{uuid.uuid4().hex[:8]}"
+    set_active_job(job_id)
     now = datetime.now(timezone.utc).isoformat()
 
     conn = get_conn()
@@ -380,6 +381,7 @@ def process_sample_video(background_tasks: BackgroundTasks, sample_type: Optiona
     sample_path = str(sample)
 
     job_id = f"job-{uuid.uuid4().hex[:8]}"
+    set_active_job(job_id)
     now = datetime.now(timezone.utc).isoformat()
 
     conn = get_conn()
@@ -448,6 +450,7 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
 
         # Create job and start detection in background
         job_id = f"job-{uuid.uuid4().hex[:8]}"
+        set_active_job(job_id)
         now = datetime.now(timezone.utc).isoformat()
 
         conn = get_conn()
