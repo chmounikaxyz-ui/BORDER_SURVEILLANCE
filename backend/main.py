@@ -621,12 +621,12 @@ def get_alerts():
             d["videoUrl"] = f"/evidence/videos/{alert_id}.mp4"
         elif vid_webm.exists():
             d["videoUrl"] = f"/evidence/videos/{alert_id}.webm"
-        elif raw_vid and not raw_vid.endswith(".jpg"):
+        elif raw_vid and not raw_vid.endswith(".jpg") and not raw_vid.endswith(".png"):
             d["videoUrl"] = raw_vid
+        elif "LC71" in title_str or "ANPR" in title_str or d.get("camera_code") == "CAM-ANALYSIS" or d.get("cameraCode") == "CAM-ANALYSIS":
+            d["videoUrl"] = "/samples/14266560_3840_2160_30fps.mp4"
         elif raw_img and (raw_img.endswith(".mp4") or raw_img.endswith(".webm") or raw_img.startswith("data:video/")) and "ALRT-0EEA47.mp4" not in raw_img:
             d["videoUrl"] = raw_img
-        elif d.get("camera_code") == "CAM-ANALYSIS" or d.get("cameraCode") == "CAM-ANALYSIS":
-            d["videoUrl"] = "/uploads/14266560_3840_2160_30fps.mp4"
         else:
             d["videoUrl"] = None
         

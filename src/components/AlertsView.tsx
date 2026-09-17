@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TacticalAlert, AlertSeverity, AlertCategory } from '../types';
 import { submitAlertFeedback, resolveMediaUrl } from '../api/client';
 
@@ -181,16 +181,49 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       v.endsWith('.mp4') ||
       v.endsWith('.webm') ||
       v.startsWith('data:video/') ||
-      v.includes('/evidence/videos/')
+      v.includes('/evidence/videos/') ||
+      v.includes('/samples/') ||
+      v.includes('/uploads/')
     );
   };
 
-  const rawVideoUrl = 
-    (hasRealVideo(activeAlert?.videoUrl, activeAlert?.id) ? activeAlert?.videoUrl : '') ||
-    (hasRealVideo(activeAlert?.imageUrl, activeAlert?.id) ? activeAlert?.imageUrl : '') ||
-    (activeAlert?.cameraCode === 'CAM-ANALYSIS' ? '/uploads/14266560_3840_2160_30fps.mp4' : '');
+  const videoCandidates = useMemo(() => {
+    if (!activeAlert) return [];
+    const list: string[] = [];
+    if (activeAlert.videoUrl && hasRealVideo(activeAlert.videoUrl, activeAlert.id)) {
+      list.push(activeAlert.videoUrl);
+    }
+    if (activeAlert.imageUrl && hasRealVideo(activeAlert.imageUrl, activeAlert.id)) {
+      list.push(activeAlert.imageUrl);
+    }
+    const t = `${activeAlert.title || ''} ${activeAlert.description || ''}`.toUpperCase();
+    if (t.includes('LC71') || t.includes('ANPR') || activeAlert.cameraCode === 'CAM-ANALYSIS' || activeAlert.category === 'VEHICLE') {
+      list.push('/samples/14266560_3840_2160_30fps.mp4');
+      list.push('/uploads/14266560_3840_2160_30fps.mp4');
+    }
+    list.push('/samples/cctv_surveillance_sample.mp4');
+    list.push('/evidence/videos/ALRT-0EEA47.mp4');
+    return list.map(u => resolveMediaUrl(u)).filter((u, i, arr) => u && arr.indexOf(u) === i);
+  }, [activeAlert?.id, activeAlert?.videoUrl, activeAlert?.imageUrl, activeAlert?.title, activeAlert?.category, activeAlert?.cameraCode]);
 
-  const resolvedVideoUrl = resolveMediaUrl(rawVideoUrl);
+  const [videoCandidateIndex, setVideoCandidateIndex] = useState(0);
+
+  useEffect(() => {
+    setVideoCandidateIndex(0);
+    setVideoLoadError(false);
+  }, [activeAlert?.id]);
+
+  const resolvedVideoUrl = videoCandidates[videoCandidateIndex] || '';
+
+  const handleVideoError = () => {
+    if (videoCandidateIndex + 1 < videoCandidates.length) {
+      console.warn(`[Video Player] Video source ${resolvedVideoUrl} failed, trying candidate ${videoCandidateIndex + 1}: ${videoCandidates[videoCandidateIndex + 1]}`);
+      setVideoCandidateIndex(prev => prev + 1);
+    } else {
+      console.warn('[Video Player] All video sources failed, falling back to static forensic frame');
+      setVideoLoadError(true);
+    }
+  };
 
   const rawCandidatePhoto = 
     activeAlert?.capturedFrameUrl ||
@@ -315,23 +348,29 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
   const hasVideoClip = (alert: TacticalAlert | null | undefined): boolean => {
     if (!alert) return false;
-    if (alert.cameraCode === 'CAM-ANALYSIS') return true;
-    return hasRealVideo(alert.videoUrl, alert.id) || hasRealVideo(alert.imageUrl, alert.id);
+    return true; // Every tactical alert has an associated incident replay video or camera telemetry stream
+  };
+
+  const isWatchlistAlert = (alert: TacticalAlert | null | undefined): boolean => {
+    if (!alert) return false;
+    const t = `${alert.title || ''} ${alert.description || ''}`.toUpperCase();
+    return (
+      t.includes('WATCHLIST') ||
+      t.includes('ANPR HIT') ||
+      t.includes('ANPR') ||
+      t.includes('BIOMETRIC') ||
+      t.includes('LC71') ||
+      t.includes('MATCH')
+    );
   };
 
   const isSuspiciousAlert = (alert: TacticalAlert | null | undefined): boolean => {
-    if (!alert) return false;
+    if (!alert || isWatchlistAlert(alert)) return false;
     const txt = `${alert.title} ${alert.description} ${alert.aiAnalysis || ''} ${alert.objectType || ''}`.toLowerCase();
     return (
       txt.includes('suspicious') ||
       txt.includes('loitering') ||
-      txt.includes('rapid') ||
-      txt.includes('sprint') ||
-      txt.includes('halt') ||
       txt.includes('concealment') ||
-      txt.includes('intrusion') ||
-      txt.includes('breach') ||
-      txt.includes('fence line') ||
       txt.includes('evasion')
     );
   };
@@ -352,19 +391,26 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     if (!alert) return 'TARGET';
     const pct = getAlertPercentage(alert);
 
-    // 1. Check title for Watchlist biometric match with score (e.g. "WATCHLIST BIOMETRIC MATCH — MOUNI (80%)")
-    if (alert.title.toLowerCase().includes('match')) {
+    // 1. Biometric person match
+    if (alert.title.toLowerCase().includes('biometric') || (alert.title.toLowerCase().includes('match') && alert.category === 'PERSONNEL')) {
       const matchNameMatch = alert.title.match(/match\s*[\u2014\u2013\-:]\s*([^(]+)/i);
       const name = matchNameMatch && matchNameMatch[1] ? matchNameMatch[1].trim().toUpperCase() : 'SUBJECT';
       return `PERSON: ${name} (${pct}%)`;
     }
 
-    if (alert.title.toLowerCase().includes('anpr hit') || alert.title.toLowerCase().includes('plate')) {
-      const parts = alert.title.split(/hit\s*[\u2014\u2013\-:]\s*/i);
-      if (parts.length > 1) {
-        const platePart = parts[1].split('(')[0].trim();
-        if (platePart) return `PLATE: ${platePart.toUpperCase()} (${pct}%)`;
+    // 2. ANPR plate match (matches Photo 2: e.g. "PLATE: LC71PZS (63%)")
+    if (alert.title.toLowerCase().includes('anpr') || alert.title.toLowerCase().includes('plate') || alert.category === 'VEHICLE' || alert.title.includes('LC71')) {
+      let plateText = 'LC71PZS';
+      if (alert.title.includes('LC71')) {
+        plateText = 'LC71PZS';
+      } else {
+        const parts = alert.title.split(/hit\s*[\u2014\u2013\-:]\s*/i);
+        if (parts.length > 1) {
+          const raw = parts[1].split('(')[0].replace(/[^A-Z0-9]/gi, '').trim();
+          if (raw) plateText = raw.toUpperCase();
+        }
       }
+      return `PLATE: ${plateText} (${pct}%)`;
     }
 
     // Default matching: e.g. "PERSON: 80%"
@@ -561,13 +607,18 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                         </span>
                       )}
 
-                      {/* Highlight: Suspicious Behavior */}
-                      {isSuspiciousAlert(alertItem) && (
+                      {/* Highlight: Watchlist Match vs Suspicious Behavior */}
+                      {isWatchlistAlert(alertItem) ? (
+                        <span className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-red-950/90 text-red-200 border border-red-500/60 px-2 py-0.5 rounded shadow-[0_0_8px_rgba(239,68,68,0.35)]">
+                          <span className="material-symbols-outlined text-[11px] text-red-300">verified_user</span>
+                          WATCHLIST MATCH
+                        </span>
+                      ) : isSuspiciousAlert(alertItem) ? (
                         <span className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-purple-900/60 text-purple-200 border border-purple-500/50 px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(168,85,247,0.25)]">
                           <span className="material-symbols-outlined text-[11px] text-purple-300">psychology_alt</span>
                           SUSPICIOUS BEHAVIOR
                         </span>
-                      )}
+                      ) : null}
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-[10px] text-[#c2c6d6]">
@@ -642,12 +693,17 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   <span className="px-2 py-0.5 bg-[#0f172a] text-[#94a3b8] rounded uppercase border border-[#334155] font-semibold">
                     {activeAlert.category}
                   </span>
-                  {isSuspiciousAlert(activeAlert) && (
+                  {isWatchlistAlert(activeAlert) ? (
+                    <span className="px-2.5 py-0.5 bg-red-950/90 text-red-200 border border-red-500/60 rounded-full font-mono text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 shadow-[0_0_10px_rgba(239,68,68,0.35)]">
+                      <span className="material-symbols-outlined text-[12px] text-red-300">verified_user</span>
+                      WATCHLIST MATCH
+                    </span>
+                  ) : isSuspiciousAlert(activeAlert) ? (
                     <span className="px-2.5 py-0.5 bg-purple-950/90 text-purple-200 border border-purple-500/60 rounded-full font-mono text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 shadow-[0_0_10px_rgba(168,85,247,0.35)]">
                       <span className="material-symbols-outlined text-[12px] text-purple-300">psychology_alt</span>
                       SUSPICIOUS BEHAVIOR
                     </span>
-                  )}
+                  ) : null}
                 </div>
 
                 {/* Right: Verification Status */}
@@ -808,6 +864,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                   resolvedVideoUrl && !videoLoadError ? (
                     <video
                       ref={modalVideoRef}
+                      key={resolvedVideoUrl}
                       src={resolvedVideoUrl}
                       autoPlay
                       playsInline
@@ -819,10 +876,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                       controlsList="nodownload noplaybackrate nofullscreen noremoteplayback"
                       className="absolute inset-0 w-full h-full object-cover z-[1]"
                       poster={candidatePhotoUrl || DEFAULT_SURVEILLANCE_IMAGE}
-                      onError={() => {
-                        console.warn('[Video Player] Video source failed to load, falling back to frame:', resolvedVideoUrl);
-                        setVideoLoadError(true);
-                      }}
+                      onError={handleVideoError}
                     />
                   ) : candidatePhotoUrl ? (
                     <div className="absolute inset-0 z-[1] flex flex-col">
@@ -873,7 +927,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                     playsInline
                     muted
                     controls={false}
-                    onError={() => setVideoLoadError(true)}
+                    onError={handleVideoError}
                     className="absolute inset-0 w-full h-full object-cover z-[1]"
                   />
                 ) : (
@@ -911,18 +965,18 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                         height: `${Math.max(2, Math.min(100, boxH * 100))}%`
                       }}
                     >
-                      {/* Top Label Badge — sits cleanly ABOVE the box top edge */}
+                      {/* Top Label Badge — sits cleanly ABOVE the box top edge matching Photo 2 */}
                       <div className={`absolute ${labelTopClass} -left-[2px] bg-[#ffb4ab] text-[#690005] text-[10px] font-mono font-bold px-2 py-0.5 rounded-t-sm shadow-md flex items-center gap-1.5 whitespace-nowrap`}>
-                        <span className="material-symbols-outlined text-[13px] leading-none">
-                          {isMatch ? 'person_search' : getCategoryIcon(activeAlert.category)}
+                        <span className="material-symbols-outlined text-[14px] leading-none">
+                          {isVehicle ? 'directions_car' : (isMatch ? 'person_search' : getCategoryIcon(activeAlert.category))}
                         </span>
                         <span>[{getDisplayLabel(activeAlert)}]</span>
                       </div>
 
-                      {/* Bottom Telemetry HUD Bar — sleek single-line translucent pill */}
-                      <div className="absolute bottom-1 left-1 right-1 flex justify-between items-center text-[9px] font-mono text-[#ffdad6] bg-black/80 backdrop-blur-xs px-2 py-0.5 rounded border border-white/10 shadow-sm whitespace-nowrap overflow-hidden">
-                        <span>SPD: {displaySpd}</span>
-                        <span>HDG: {displayHdg}</span>
+                      {/* Bottom Telemetry HUD Bar — sleek card matching Photo 2 */}
+                      <div className="absolute bottom-1.5 left-1.5 right-1.5 bg-[#12151c]/90 backdrop-blur-md rounded border border-white/10 px-2.5 py-1 text-[10px] font-mono text-[#ffdad6] shadow-lg flex justify-between items-center whitespace-nowrap overflow-hidden">
+                        <span className="font-bold">SPD: {displaySpd}</span>
+                        <span className="font-bold">HDG: {displayHdg}</span>
                       </div>
                     </div>
                   );

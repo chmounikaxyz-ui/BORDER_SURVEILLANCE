@@ -43,41 +43,9 @@ def save_evidence_frame(
         annotated = frame.copy()
         h, w = annotated.shape[:2]
 
-    # ── Draw ONLY the detected target box ─────────────────────────────────────
-    for b in boxes_info:
-        x1, y1, x2, y2 = b.get("xyxy", [0, 0, 100, 100])
-        plate = b.get("plate")
-        is_target = b.get("is_target", False) or bool(plate)
-        if not is_target:
-            continue  # ONLY highlight the detected target car!
+    # Preserve clean forensic frame pixels so high-DPI frontend overlay can render cleanly without overlapping text blocks
+    # (Complies with digital forensics integrity standards)
 
-        if plate:
-            label = f"WATCHLIST MATCH: {plate}"
-        elif b.get("class_name", "").lower() == "person":
-            label = f"SUSPICIOUS BEHAVIOR: PERSON #{b.get('track_id', 1)}"
-        else:
-            label = f"INTRUSION DETECTED: {b.get('class_name', 'TARGET').upper()}"
-        colour = (0, 0, 240)        # Bright tactical red (BGR)
-
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), colour, 2)
-        c_len = min(18, max(6, (x2 - x1) // 4), max(6, (y2 - y1) // 4))
-        cv2.line(annotated, (x1, y1), (x1 + c_len, y1), colour, 3)
-        cv2.line(annotated, (x1, y1), (x1, y1 + c_len), colour, 3)
-        cv2.line(annotated, (x2, y1), (x2 - c_len, y1), colour, 3)
-        cv2.line(annotated, (x2, y1), (x2, y1 + c_len), colour, 3)
-        cv2.line(annotated, (x1, y2), (x1 + c_len, y2), colour, 3)
-        cv2.line(annotated, (x1, y2), (x1, y2 - c_len), colour, 3)
-        cv2.line(annotated, (x2, y2), (x2 - c_len, y2), colour, 3)
-        cv2.line(annotated, (x2, y2), (x2, y2 - c_len), colour, 3)
-
-        # Label pill
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)
-        cv2.rectangle(annotated, (x1, max(0, y1 - th - 10)), (x1 + tw + 8, max(th + 10, y1)), colour, -1)
-        cv2.putText(
-            annotated, label,
-            (x1 + 4, max(th + 2, y1 - 4)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1,
-        )
 
 
     # ── Write file ───────────────────────────────────────────────────────────
