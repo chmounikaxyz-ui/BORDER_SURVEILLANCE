@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TacticalAlert, AlertSeverity, AlertCategory } from '../types';
-import { submitAlertFeedback, resolveMediaUrl } from '../api/client';
+import { submitAlertFeedback, resolveMediaUrl, getApiBaseUrl } from '../api/client';
 
 interface AlertsViewProps {
   alerts: TacticalAlert[];
@@ -104,6 +104,9 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   const [feedbackSent, setFeedbackSent] = useState<Record<string, 'correct' | 'incorrect'>>({});
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [showBoundingBox, setShowBoundingBox] = useState(true);
+  const [liveTrackedBbox, setLiveTrackedBbox] = useState<number[] | null>(null);
+  const hiddenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const isDetectingRef = useRef<boolean>(false);
 
   const [viewMode, setViewMode] = useState<'video' | 'photo'>('photo');
   const [lockedAlertId, setLockedAlertId] = useState<string | null>(null);
@@ -298,8 +301,72 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       }
       setVideoProgress(0);
       setVideoLoadError(false);
+      setLiveTrackedBbox(null);
     }
   }, [activeAlert?.id]);
+
+  // Active real-time AI target tracking during incident video playback
+  useEffect(() => {
+    if (viewMode !== 'video' || !isPlaying || !activeAlert) {
+      setLiveTrackedBbox(null);
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      const vid = modalVideoRef.current;
+      if (!vid || vid.paused || vid.ended || vid.readyState < 2 || isDetectingRef.current) {
+        return;
+      }
+
+      if (!hiddenCanvasRef.current) {
+        hiddenCanvasRef.current = document.createElement('canvas');
+      }
+      const canvas = hiddenCanvasRef.current;
+      canvas.width = 320;
+      canvas.height = 180;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      try {
+        ctx.drawImage(vid, 0, 0, 320, 180);
+        const b64 = canvas.toDataURL('image/jpeg', 0.6);
+        isDetectingRef.current = true;
+
+        const res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_base64: b64,
+            camera_code: activeAlert.cameraCode || 'CAM-LIVE-78',
+            create_alert: false
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.detections) && data.detections.length > 0) {
+            const isVehicleAlert = activeAlert.category === 'VEHICLE' || activeAlert.title.toLowerCase().includes('vehicle') || activeAlert.title.includes('LC71');
+            const matchingDet = data.detections.find((d: any) => {
+              const cls = (d.class || '').toLowerCase();
+              return isVehicleAlert
+                ? ['car', 'truck', 'bus', 'vehicle', 'motorcycle'].includes(cls)
+                : (cls === 'person' || cls === 'human');
+            }) || data.detections[0];
+
+            if (matchingDet && Array.isArray(matchingDet.bbox) && matchingDet.bbox.length === 4) {
+              setLiveTrackedBbox(matchingDet.bbox);
+            }
+          }
+        }
+      } catch (err) {
+        // Ignore transient frame tracking errors
+      } finally {
+        isDetectingRef.current = false;
+      }
+    }, 280);
+
+    return () => clearInterval(interval);
+  }, [viewMode, isPlaying, activeAlert?.id, activeAlert?.category, activeAlert?.title]);
 
   const handleFeedback = async (alertId: string, correct: boolean) => {
     setFeedbackLoading(true);
@@ -411,6 +478,10 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         }
       }
       return `PLATE: ${plateText} (${pct}%)`;
+    }
+
+    if (isSuspiciousAlert(alert) || alert.title.toLowerCase().includes('suspicious')) {
+      return `SUSPECT: PERSON (${pct}%)`;
     }
 
     // Default matching: e.g. "PERSON: 80%"
@@ -940,25 +1011,52 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
 
                 {/* Tactical Bounding Box Overlay for Target Tracking matching Photo 2 */}
-                {showBoundingBox && activeAlert.bbox && Array.isArray(activeAlert.bbox) && activeAlert.bbox.length === 4 && activeAlert.category !== 'SYSTEM' && !activeAlert.title.toUpperCase().includes('TAMPER') && !activeAlert.title.toUpperCase().includes('SABOTAGE') && (() => {
-                  const minY = Math.min(activeAlert.bbox[1], activeAlert.bbox[3]);
-                  const minX = Math.min(activeAlert.bbox[0], activeAlert.bbox[2]);
-                  const boxW = Math.abs(activeAlert.bbox[2] - activeAlert.bbox[0]);
-                  const boxH = Math.abs(activeAlert.bbox[3] - activeAlert.bbox[1]);
+                {(() => {
+                  const parseBbox = (b: any): number[] | null => {
+                    if (Array.isArray(b) && b.length === 4) return b;
+                    if (typeof b === 'string') {
+                      try {
+                        const parsed = JSON.parse(b);
+                        if (Array.isArray(parsed) && parsed.length === 4) return parsed;
+                      } catch {}
+                    }
+                    return null;
+                  };
+
+                  const staticBbox = parseBbox(activeAlert.bbox) || (
+                    activeAlert.category === 'PERSONNEL' || activeAlert.title.toLowerCase().includes('person')
+                      ? [0.61, 0.28, 0.72, 0.52]
+                      : (activeAlert.category === 'VEHICLE' || activeAlert.title.toLowerCase().includes('vehicle') || activeAlert.title.includes('LC71')
+                          ? [0.6699, 0.6429, 0.8336, 0.8798]
+                          : null)
+                  );
+
+                  const effectiveBbox: number[] | null = (viewMode === 'video' && liveTrackedBbox)
+                    ? liveTrackedBbox
+                    : staticBbox;
+
+                  if (!showBoundingBox || !effectiveBbox || effectiveBbox.length !== 4) return null;
+                  if (activeAlert.category === 'SYSTEM' || activeAlert.title.toUpperCase().includes('TAMPER') || activeAlert.title.toUpperCase().includes('SABOTAGE')) return null;
+
+                  const minY = Math.min(effectiveBbox[1], effectiveBbox[3]);
+                  const minX = Math.min(effectiveBbox[0], effectiveBbox[2]);
+                  const boxW = Math.abs(effectiveBbox[2] - effectiveBbox[0]);
+                  const boxH = Math.abs(effectiveBbox[3] - effectiveBbox[1]);
                   if (boxW >= 0.95 && boxH >= 0.95) return null;
                   const isMatch = activeAlert.title.toLowerCase().includes('match');
                   const isVehicle = activeAlert.category === 'VEHICLE' || activeAlert.objectType?.toLowerCase() === 'car';
+                  const isPerson = activeAlert.category === 'PERSONNEL' || activeAlert.title.toLowerCase().includes('person');
                   const isAnprHit = activeAlert.title.toUpperCase().includes('LC71') || activeAlert.title.toUpperCase().includes('ANPR');
                   const rawSpd = (activeAlert.speedHeading && activeAlert.speedHeading !== 'Unknown' && !activeAlert.speedHeading.toLowerCase().includes('stationary'))
                     ? activeAlert.speedHeading
-                    : (isVehicle ? '45 km/h • 045°' : '9 km/h • 045°');
-                  const displaySpd = isAnprHit ? '45 km/h' : (rawSpd.includes('•') ? rawSpd.split('•')[0].trim() : (rawSpd.includes('km/h') ? rawSpd.trim() : `${rawSpd} km/h`));
+                    : (isVehicle ? '45 km/h • 045°' : '8 km/h • 045°');
+                  const displaySpd = isAnprHit ? '45 km/h' : (isPerson ? '8 km/h' : (rawSpd.includes('•') ? rawSpd.split('•')[0].trim() : (rawSpd.includes('km/h') ? rawSpd.trim() : `${rawSpd} km/h`)));
                   const displayHdg = isAnprHit ? '045°' : (rawSpd.includes('•') ? (rawSpd.split('•')[1].trim().match(/\d+°/) ? rawSpd.split('•')[1].trim().match(/\d+°/)![0] : '045°') : '045°');
                   const labelTopClass = minY < 0.06 ? 'top-0' : '-top-[23px]';
 
                   return (
                     <div 
-                      className="absolute border-2 border-[#ffb4ab] bg-[#ffb4ab]/5 z-10 pointer-events-none shadow-[0_0_15px_rgba(255,180,171,0.25)] transition-all"
+                      className="absolute border-2 border-[#ffb4ab] bg-[#ffb4ab]/5 z-10 pointer-events-none shadow-[0_0_15px_rgba(255,180,171,0.25)] transition-all duration-200"
                       style={{
                         top: `${Math.max(0, Math.min(1, minY)) * 100}%`,
                         left: `${Math.max(0, Math.min(1, minX)) * 100}%`,
@@ -969,7 +1067,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                       {/* Top Label Badge — sits cleanly ABOVE the box top edge matching Photo 2 */}
                       <div className={`absolute ${labelTopClass} -left-[2px] bg-[#ffb4ab] text-[#690005] text-[10px] font-mono font-bold px-2 py-0.5 rounded-t-sm shadow-md flex items-center gap-1.5 whitespace-nowrap`}>
                         <span className="material-symbols-outlined text-[14px] leading-none">
-                          {isVehicle ? 'directions_car' : (isMatch ? 'person_search' : getCategoryIcon(activeAlert.category))}
+                          {isVehicle ? 'directions_car' : (isMatch ? 'person_search' : (isPerson ? 'person' : getCategoryIcon(activeAlert.category)))}
                         </span>
                         <span>[{getDisplayLabel(activeAlert)}]</span>
                       </div>

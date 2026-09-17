@@ -126,7 +126,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     const shouldPoll = job?.status === 'queued' || job?.status === 'running';
     if (shouldPoll && !pollRef.current) {
       pollRef.current = setInterval(async () => {
-        const status = await getVideoStatus();
+        const status = await getVideoStatus(job?.job_id);
         if (status) {
           setJob(status);
           if (status.status === 'complete' || status.status === 'error') {
@@ -223,21 +223,8 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       return;
     }
 
-    // Fast-path: If user selected the bundled surveillance footage (14266560 or highway sample),
-    // launch detection immediately using the pre-loaded server video to avoid slow 31MB upload delays.
-    const isSampleFootage =
-      selectedFile.name.includes('14266560') ||
-      selectedFile.name.toLowerCase().includes('highway') ||
-      selectedFile.name.toLowerCase().includes('cctv_surveillance');
-
-    if (isSampleFootage) {
-      console.log('[VideoProcessor] Bundled sample video detected. Launching instant analysis directly...');
-      await handleSampleStart();
-      return;
-    }
-
-    if (selectedFile.size > 150 * 1024 * 1024) {
-      setError(`File is too large (${(selectedFile.size / (1024 * 1024)).toFixed(1)}MB). For cloud processing, please upload a video under 150MB or use the Preset Highway Surveillance sample.`);
+    if (selectedFile.size > 200 * 1024 * 1024) {
+      setError(`File is too large (${(selectedFile.size / (1024 * 1024)).toFixed(1)}MB). For fast cloud processing, please upload a video under 200MB.`);
       return;
     }
 
@@ -261,11 +248,11 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       }
 
       setUploadProgress(null);
-      if (result.filename) {
+      // Retain the immediate local blob preview so video playback does not freeze on cloud download
+      if (!videoPreviewUrl && result.filename) {
         const apiBase = getApiBaseUrl();
         const origin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : '';
-        const serverUrl = `${origin}/uploads/${result.filename}`;
-        setVideoPreviewUrl(serverUrl);
+        setVideoPreviewUrl(`${origin}/uploads/${result.filename}`);
       }
       setDisplayMode('player');
 
@@ -312,10 +299,10 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
   };
 
   // ── Start detection on pre-loaded sample video ───────────────────────────
-  const handleSampleStart = async () => {
+  const handleSampleStart = async (sampleType: 'highway' | 'intrusion' = 'highway') => {
     setError(null);
     setIsStarting(true);
-    const result = await processSampleVideo();
+    const result = await processSampleVideo(sampleType);
     setIsStarting(false);
 
     if (!result || result.error || !result.job_id) {
@@ -326,10 +313,14 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       return;
     }
 
-    if (result.filename && !videoPreviewUrl) {
-      const apiBase = getApiBaseUrl();
-      const origin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : '';
+    const apiBase = getApiBaseUrl();
+    const origin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : '';
+    if (result.filename) {
       setVideoPreviewUrl(`${origin}/uploads/${result.filename}`);
+    } else if (sampleType === 'intrusion') {
+      setVideoPreviewUrl(`${origin}/samples/cctv_surveillance_sample.mp4`);
+    } else {
+      setVideoPreviewUrl(`${origin}/samples/14266560_3840_2160_30fps.mp4`);
     }
     setDisplayMode('player');
 
@@ -656,25 +647,37 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                 className="w-full py-3 bg-[#4d8eff] hover:bg-[#adc6ff] text-[#00285d] font-bold rounded-lg text-[12px] uppercase tracking-wider transition-colors shadow-md flex items-center justify-center gap-2"
               >
                 <span className="material-symbols-outlined text-[18px]">play_arrow</span>
-                {selectedFile.name.includes('14266560') || selectedFile.name.toLowerCase().includes('highway') || selectedFile.name.toLowerCase().includes('cctv_surveillance')
-                  ? 'Start Detection (Instant Preset)'
-                  : 'Upload & Start Detection'}
+                Upload & Start Detection
               </button>
             )}
 
-            {/* Quick Demo Test Button */}
+            {/* Quick Demo Test Presets */}
             {!selectedFile && !isUploading && (
-              <button
-                type="button"
-                onClick={handleSampleStart}
-                disabled={isStarting || isRunning}
-                className="w-full py-2.5 bg-[#222a39] hover:bg-[#2c3544] border border-[#adc6ff]/30 text-[#adc6ff] font-bold rounded-lg text-[12px] uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-sm"
-              >
-                <span className={`material-symbols-outlined text-[18px] ${isStarting ? 'animate-spin' : ''}`}>
-                  {isStarting ? 'sync' : 'smart_display'}
-                </span>
-                {isStarting ? 'Starting Detection...' : 'Run AI Detection on Highway Surveillance Footage (Preset Sample)'}
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => handleSampleStart('highway')}
+                  disabled={isStarting || isRunning}
+                  className="py-2.5 px-3 bg-[#222a39] hover:bg-[#2c3544] border border-[#adc6ff]/30 text-[#adc6ff] font-bold rounded-lg text-[11px] uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-sm"
+                >
+                  <span className={`material-symbols-outlined text-[16px] ${isStarting ? 'animate-spin' : ''}`}>
+                    {isStarting ? 'sync' : 'directions_car'}
+                  </span>
+                  <span>Highway ANPR Preset</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSampleStart('intrusion')}
+                  disabled={isStarting || isRunning}
+                  className="py-2.5 px-3 bg-[#222a39] hover:bg-[#2c3544] border border-[#ffb4ab]/30 text-[#ffb4ab] font-bold rounded-lg text-[11px] uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-sm"
+                >
+                  <span className={`material-symbols-outlined text-[16px] ${isStarting ? 'animate-spin' : ''}`}>
+                    {isStarting ? 'sync' : 'night_sight'}
+                  </span>
+                  <span>Night Perimeter Preset</span>
+                </button>
+              </div>
             )}
           </>
         )}

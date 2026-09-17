@@ -751,8 +751,37 @@ class DetectionEngine:
                             )
                         continue
 
-                    # ── Vehicles check: If vehicle is not a watchlist match, do not generate zone breach alerts
+                    # ── Vehicles check: If vehicle is not a watchlist match, check zone intrusion
                     if is_vehicle:
+                        if intrusion and track_id not in alerted_tracks:
+                            alerted_tracks.add(track_id)
+                            alerts_generated += 1
+                            alert_id = f"ALRT-V-{uuid.uuid4().hex[:6].upper()}"
+                            alert_summaries.append(f"Vehicle Intrusion: {cls_name.upper()} #{track_id}")
+                            try:
+                                filename, i_hash, f_hash = save_evidence_frame(
+                                    frame, alert_id, boxes_for_evidence
+                                )
+                                image_url = f"/evidence/frames/{filename}"
+                            except Exception as exc:
+                                print(f"[Evidence] vehicle frame save notice: {exc}")
+                                image_url, i_hash, f_hash = "", "0x00...00", "0x" + "0" * 64
+
+                            intrusion["bbox"] = [orig_x1 / fw, orig_y1 / fh, orig_x2 / fw, orig_y2 / fh]
+                            vid_url = save_evidence_video(video_path, alert_id, frame_idx, fps)
+                            _create_alert(
+                                alert_id=alert_id,
+                                intrusion=intrusion,
+                                speed_heading=speed_str,
+                                image_url=image_url,
+                                integrity_hash=i_hash,
+                                full_hash=f_hash,
+                                frame_idx=frame_idx,
+                                fps=fps,
+                                anpr_hit=None,
+                                reid_event=None,
+                                video_url=vid_url,
+                            )
                         continue
 
                     # ── Personnel / Person Face Watchlist Check ───────────────
@@ -794,6 +823,10 @@ class DetectionEngine:
                         timestamp=frame_idx / fps,
                         speed_kmh=speed_kmh,
                     )
+                    # Ensure intrusion always carries accurate normalized target bounding box
+                    if intrusion and "bbox" not in intrusion:
+                        intrusion["bbox"] = [orig_x1 / fw, orig_y1 / fh, orig_x2 / fw, orig_y2 / fh]
+
                     # For video analysis footage: ensure detected persons trigger suspicious behavior
                     if not intrusion and cls == 0 and conf >= 0.30:
                         intrusion = {
@@ -812,6 +845,7 @@ class DetectionEngine:
                             "risk_score": 98 if is_watchlist_match else 88,
                             "cx_norm": cx / fw,
                             "cy_norm": cy / fh,
+                            "bbox": [orig_x1 / fw, orig_y1 / fh, orig_x2 / fw, orig_y2 / fh],
                             "timestamp_s": frame_idx / fps,
                             "activity": {"title": "Intrusion Movement", "type": "Perimeter Crossing", "description": "Subject traversing monitored perimeter zone"},
                         }
@@ -882,6 +916,9 @@ class DetectionEngine:
                             print(f"[ReID] Error: {exc}")
 
                         vid_url = save_evidence_video(video_path, alert_id, frame_idx, fps)
+
+                        if intrusion:
+                            intrusion["bbox"] = [orig_x1 / fw, orig_y1 / fh, orig_x2 / fw, orig_y2 / fh]
 
                         _create_alert(
                             alert_id=alert_id,

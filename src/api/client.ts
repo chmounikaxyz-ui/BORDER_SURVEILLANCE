@@ -342,7 +342,7 @@ export async function processVideo(videoPath: string): Promise<{ job_id?: string
   return { error: lastError || 'Backend unreachable.' };
 }
 
-export async function processSampleVideo(): Promise<{ job_id?: string; status?: string; filename?: string; error?: string } | null> {
+export async function processSampleVideo(sampleType: 'highway' | 'intrusion' = 'highway'): Promise<{ job_id?: string; status?: string; filename?: string; video_url?: string; error?: string } | null> {
   const candidateBases = getCandidateApiBases();
 
   let lastError = '';
@@ -350,7 +350,7 @@ export async function processSampleVideo(): Promise<{ job_id?: string; status?: 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s for Render cold start
     try {
-      const res = await fetch(`${b}/video/sample`, {
+      const res = await fetch(`${b}/video/sample?sample_type=${sampleType}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -384,8 +384,9 @@ export async function processSampleVideo(): Promise<{ job_id?: string; status?: 
   return { error: lastError || 'Backend unreachable. If on Render, the service may be starting up; please try again shortly.' };
 }
 
-export async function getVideoStatus(): Promise<VideoJob | null> {
-  return apiFetch<VideoJob>('/video/status');
+export async function getVideoStatus(jobId?: string): Promise<VideoJob | null> {
+  const query = jobId ? `?job_id=${encodeURIComponent(jobId)}` : '';
+  return apiFetch<VideoJob>(`/video/status${query}`);
 }
 
 export interface UploadProgress {
