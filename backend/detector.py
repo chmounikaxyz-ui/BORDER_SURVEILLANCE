@@ -477,20 +477,9 @@ class DetectionEngine:
         _update_job(job_id, status="running", total_frames=total_frames, current_frame=1, progress=1)
         print(f"[Detector] Job {job_id} — {total_frames} frames @ {fps:.1f} fps")
 
-        # Read first frame immediately so stream never shows idle placeholder
-        ret, first_frame = cap.read()
-        if ret and first_frame is not None:
-            fh, fw = first_frame.shape[:2]
-            scale_init = 1280.0 / fw if fw > 1280 else 1.0
-            init_preview = cv2.resize(first_frame, (1280, int(fh * scale_init))) if scale_init != 1.0 else first_frame
-            with _frame_lock:
-                _stream_active = True
-                _latest_frame = init_preview.copy()
-            # Rewind to start
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        else:
-            with _frame_lock:
-                _stream_active = True
+        with _frame_lock:
+            _stream_active = True
+            _latest_frame = None  # Clear previous video's frame so stale footage is never shown
 
         zone_engine   = ZoneRulesEngine()
         reid_store    = _get_reid()
@@ -525,7 +514,7 @@ class DetectionEngine:
                 # Sample frames according to stride for 4x-10x speedup
                 if frame_idx > 1 and (frame_idx % stride != 0):
                     # Keep UI progress updating continuously
-                    if frame_idx % 8 == 0 or frame_idx == total_frames:
+                    if frame_idx % 2 == 0 or frame_idx == total_frames:
                         progress = min(99, max(1, int(frame_idx / total_frames * 100)))
                         summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
                         _update_job(
@@ -546,31 +535,20 @@ class DetectionEngine:
                     scale = target_w / float(fw)
                     infer_frame = cv2.resize(frame, (target_w, int(fh * scale)))
 
-                # Run tracking with fallback to standard prediction in torch.inference_mode()
+                # Run fast, reliable neural prediction in torch.inference_mode()
                 results = None
                 try:
                     import torch
                     with torch.inference_mode():
-                        try:
-                            results = model.track(
-                                infer_frame,
-                                persist=True,
-                                tracker="bytetrack.yaml",
-                                classes=TARGET_CLASSES,
-                                conf=0.30,
-                                imgsz=256,
-                                verbose=False,
-                            )
-                        except Exception:
-                            results = model.predict(
-                                infer_frame,
-                                classes=TARGET_CLASSES,
-                                conf=0.30,
-                                imgsz=256,
-                                verbose=False,
-                            )
+                        results = model.predict(
+                            infer_frame,
+                            classes=TARGET_CLASSES,
+                            conf=0.25,
+                            imgsz=256,
+                            verbose=False,
+                        )
                 except Exception as track_err:
-                    print(f"[Detector] Tracking error ({track_err})")
+                    print(f"[Detector] Prediction error ({track_err})")
 
                 if not results or results[0].boxes is None:
                     # Still update the frame buffer with the raw frame

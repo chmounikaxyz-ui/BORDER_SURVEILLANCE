@@ -20,12 +20,43 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [expandedMediaMode, setExpandedMediaMode] = useState<Record<string, 'video' | 'still'>>({});
 
+  const formatEvidenceTimestamp = (ts: string) => {
+    if (!ts) return 'Unknown';
+    return ts.replace('T', ' ').split('.')[0].replace('+00:00', '').replace('Z', '').trim();
+  };
+
+  const formatEvidenceType = (type: string) => {
+    if (!type) return 'INTRUSION EVENT';
+    const formatted = type.replace(/_/g, ' ').trim().toUpperCase();
+    if (formatted === 'PERSON') return 'PERSON WITH SUSPICIOUS BEHAVIOR';
+    return formatted;
+  };
+
+  const formatEvidenceHash = (hash: string) => {
+    if (!hash) return '0x0000...0000';
+    const clean = hash.replace(/^SHA256:/i, '').replace(/^0x/i, '');
+    if (clean.length < 8) return `0x${clean}`;
+    return `0x${clean.slice(0, 4).toLowerCase()}...${clean.slice(-4).toLowerCase()}`;
+  };
+
   // Fetch live evidence from backend, fall back to mock
   useEffect(() => {
     const load = async () => {
       const live = await getEvidence();
       if (live && live.length > 0) {
-        setRecords(live as EvidenceRecord[]);
+        // Deduplicate records by eventId and cameraCode+minute
+        const seen = new Set<string>();
+        const unique = (live as EvidenceRecord[]).filter(r => {
+          const rawTs = formatEvidenceTimestamp(r.timestamp);
+          const minuteKey = `${r.cameraCode}:${rawTs.slice(0, 16)}`;
+          if (seen.has(r.eventId) || (minuteKey.length > 5 && seen.has(minuteKey))) {
+            return false;
+          }
+          seen.add(r.eventId);
+          if (minuteKey.length > 5) seen.add(minuteKey);
+          return true;
+        });
+        setRecords(unique);
       }
     };
     load();
@@ -346,29 +377,63 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                       {record.eventId}
                     </span>
                     <span className="font-mono text-[12px] text-[#c2c6d6]">
-                      {record.timestamp}
+                      {formatEvidenceTimestamp(record.timestamp)}
                     </span>
-                    <span className={`px-2.5 py-0.5 rounded text-[11px] font-bold uppercase border ${
-                      record.eventType?.toUpperCase().includes('SUSPICIOUS')
+                    {(() => {
+                      const rawType = record.eventType?.toUpperCase() || '';
+                      const isWatchlist = rawType.includes('WATCHLIST') || rawType.includes('BIOMETRIC') || rawType.includes('ANPR');
+                      const isSuspicious = rawType.includes('SUSPICIOUS');
+                      const isVehicle = rawType.includes('VEHICLE') || rawType.includes('CAR') || rawType.includes('TRUCK');
+                      const isTamper = rawType.includes('TAMPER') || rawType.includes('BLACKOUT') || rawType.includes('OCCLUSION');
+
+                      const badgeStyle = isWatchlist
+                        ? 'bg-rose-950/80 text-rose-300 border-rose-500/50 shadow-[0_0_8px_rgba(244,63,94,0.3)]'
+                        : isSuspicious
                         ? 'bg-purple-900/60 text-purple-200 border-purple-500/50 shadow-[0_0_8px_rgba(168,85,247,0.25)]'
-                        : record.eventType?.toUpperCase().includes('PERSON')
-                          ? 'bg-[#4d8eff]/20 text-[#adc6ff] border-[#adc6ff]/40'
-                          : 'bg-[#222a39] text-[#dae3f7] border-[#424754]/40'
-                    }`}>
-                      {record.eventType?.toUpperCase().includes('PERSON') && !record.eventType?.toUpperCase().includes('SUSPICIOUS')
-                        ? 'PERSON WITH SUSPICIOUS BEHAVIOR'
-                        : (record.eventType || 'Intrusion')}
-                    </span>
+                        : isVehicle
+                        ? 'bg-amber-950/80 text-amber-300 border-amber-500/50'
+                        : isTamper
+                        ? 'bg-red-950/80 text-red-300 border-red-500/50'
+                        : 'bg-[#222a39] text-[#adc6ff] border-[#424754]/40';
 
-                    {/* Media indicator badge: All records feature incident video clips */}
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-emerald-950/60 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 shadow-xs">
-                      <span className="material-symbols-outlined text-[12px]">videocam</span>
-                      VIDEO RECORDED
-                    </span>
+                      const cleanLabel = formatEvidenceType(record.eventType || 'INTRUSION');
 
-                    <span className="text-[13px] text-[#c2c6d6]">
-                      {record.source} ({record.cameraCode})
-                    </span>
+                      return (
+                        <span className={`px-2.5 py-0.5 rounded text-[11px] font-bold uppercase border flex items-center gap-1.5 ${badgeStyle}`}>
+                          {isWatchlist && <span className="material-symbols-outlined text-[13px] text-rose-400">warning</span>}
+                          {isSuspicious && <span className="material-symbols-outlined text-[13px] text-purple-300">visibility</span>}
+                          {isVehicle && <span className="material-symbols-outlined text-[13px] text-amber-400">directions_car</span>}
+                          {cleanLabel}
+                        </span>
+                      );
+                    })()}
+
+                    {/* Media indicator badge: dynamically reflect Video Recorded vs Optical Snapshot */}
+                    {Boolean(
+                      record.videoUrl &&
+                      !record.videoUrl.includes('ALRT-0EEA47.mp4') &&
+                      (record.videoUrl.endsWith('.mp4') || record.videoUrl.endsWith('.webm') || record.videoUrl.includes('/evidence/videos/'))
+                    ) ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-emerald-950/60 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 shadow-xs">
+                        <span className="material-symbols-outlined text-[12px]">videocam</span>
+                        VIDEO RECORDED
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-[#4d8eff]/10 text-[#adc6ff] border border-[#adc6ff]/30 flex items-center gap-1 shadow-xs">
+                        <span className="material-symbols-outlined text-[12px]">photo_camera</span>
+                        OPTICAL FRAME
+                      </span>
+                    )}
+
+                    {(() => {
+                      const rawSource = record.source || 'Optical Sensor';
+                      const cleanSource = rawSource.replace(new RegExp(`\\s*\\(${record.cameraCode}\\)`, 'gi'), '').trim();
+                      return (
+                        <span className="text-[13px] text-[#c2c6d6]">
+                          {cleanSource} • <span className="font-mono text-[#adc6ff]">{record.cameraCode}</span>
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   <div className="flex items-center gap-3">
@@ -389,7 +454,7 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                       className="flex items-center gap-1.5 bg-[#222a39] hover:bg-[#2c3544] px-2.5 py-1 rounded border border-[#424754]/40 font-mono text-[11px] text-[#adc6ff] transition-colors"
                       title="Click to copy full SHA-256 hash"
                     >
-                      <span>{copiedHash === record.fullHash ? 'COPIED!' : record.integrityHash}</span>
+                      <span>{copiedHash === record.fullHash ? 'COPIED!' : formatEvidenceHash(record.integrityHash || record.fullHash)}</span>
                       <span className="material-symbols-outlined text-[14px]">content_copy</span>
                     </div>
 

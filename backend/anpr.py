@@ -49,22 +49,9 @@ _GLYPH_TEMPLATES: Dict[str, np.ndarray] = {}
 
 
 def _get_paddle():
-    global _PADDLE_OCR, _PADDLE_TRIED
-    if _PADDLE_TRIED:
-        return _PADDLE_OCR
-    _PADDLE_TRIED = True
-    import sys
-    if sys.version_info >= (3, 12):
-        # Paddle C++ core is incompatible with Python 3.12+ on Windows and causes fatal libpaddle freeze
-        _PADDLE_OCR = None
-        return None
-    try:
-        from paddleocr import PaddleOCR  # type: ignore
-        _PADDLE_OCR = PaddleOCR(use_angle_cls=False, lang="en")
-        print("[ANPR] PaddleOCR loaded [OK]")
-    except Exception:
-        _PADDLE_OCR = None
-    return _PADDLE_OCR
+    # Disabled to ensure lightweight execution (<150MB RAM) without external model downloads
+    return None
+
 
 
 def _get_easyocr():

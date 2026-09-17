@@ -50,12 +50,12 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
   const [displayMode, setDisplayMode] = useState<'player' | 'stream'>('player');
   const isDetectingRef = useRef(false);
 
-  // Automatically switch to live stream while background analysis job is actively running
+  // Automatically switch to live stream while background analysis job is actively running (only for preset sample)
   useEffect(() => {
-    if (job?.status === 'running') {
+    if (job?.status === 'running' && !selectedFile) {
       setDisplayMode('stream');
     }
-  }, [job?.status]);
+  }, [job?.status, selectedFile]);
 
   // ── Frame detection trigger on video playback / seek ──────────────────────
   const runFrameDetection = useCallback(async () => {
@@ -110,9 +110,9 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     }
   }, [job]);
 
-  // ── Frame detection overlay ONLY when job is complete in player mode ─────────
+  // ── Frame detection overlay during player mode (both during active job and on completion) ──
   useEffect(() => {
-    if (!videoPreviewUrl || !job || job.status !== 'complete' || displayMode !== 'player') {
+    if (!videoPreviewUrl || !job || (job.status !== 'running' && job.status !== 'complete') || displayMode !== 'player') {
       setLiveDetections([]);
       return;
     }
@@ -198,6 +198,13 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       return;
     }
     setSelectedFile(file);
+    try {
+      const localBlob = URL.createObjectURL(file);
+      setVideoPreviewUrl(localBlob);
+      setDisplayMode('player');
+    } catch {
+      // ignore
+    }
     setError(null);
     setJob(null);
     setUploadProgress(null);
@@ -241,6 +248,14 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       }
 
       setUploadProgress(null);
+      if (result.filename) {
+        const apiBase = getApiBaseUrl();
+        const origin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : '';
+        const serverUrl = `${origin}/uploads/${result.filename}`;
+        setVideoPreviewUrl(serverUrl);
+      }
+      setDisplayMode('player');
+
       setJob({
         job_id: result.job_id,
         status: 'queued',
