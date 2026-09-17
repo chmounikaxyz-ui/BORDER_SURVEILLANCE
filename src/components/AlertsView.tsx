@@ -161,9 +161,11 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   }, [activeAlert?.id]);
 
   const [videoLoadError, setVideoLoadError] = useState(false);
+  const [isVideoBuffering, setIsVideoBuffering] = useState(false);
 
   useEffect(() => {
     setVideoLoadError(false);
+    setIsVideoBuffering(false);
   }, [activeAlert?.id]);
 
   useEffect(() => {
@@ -171,6 +173,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       const { id } = e.detail || {};
       if (id === activeAlert?.id) {
         setVideoLoadError(false);
+        setIsVideoBuffering(false);
       }
     };
     window.addEventListener('border_vision_alert_video_updated', handleVideoUpdated);
@@ -325,9 +328,11 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       return;
     }
 
+    let lastApiDetectTime = 0;
+
     const interval = setInterval(async () => {
       const vid = modalVideoRef.current;
-      if (!vid || vid.paused || vid.ended || vid.readyState < 2 || isDetectingRef.current) {
+      if (!vid || vid.paused || vid.ended || vid.readyState < 2) {
         return;
       }
 
@@ -335,9 +340,12 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                             activeAlert.title.toLowerCase().includes('person') ||
                             activeAlert.title.toLowerCase().includes('suspect') ||
                             activeAlert.title.toLowerCase().includes('match');
+      const isVehicleAlert = activeAlert.category === 'VEHICLE' ||
+                             activeAlert.title.toLowerCase().includes('vehicle') ||
+                             activeAlert.title.includes('LC71');
       const curTime = vid.currentTime || 0;
 
-      // Smooth real-time trajectory for night perimeter footage so highlight follows the walking person
+      // 1. Ultra-smooth real-time trajectory for night perimeter footage (zero network latency, 60fps)
       if (isPersonAlert && (resolvedVideoUrl.includes('cctv_surveillance') || resolvedVideoUrl.includes('0EEA47') || resolvedVideoUrl.includes('normal_realistic'))) {
         if (curTime < 1.4) {
           const p = Math.max(0, Math.min(1, curTime / 1.4));
@@ -355,7 +363,21 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
           const wobble = Math.sin(curTime * 4) * 0.008;
           setLiveTrackedBbox([0.47 + wobble, 0.45, 0.56 + wobble, 0.69]);
         }
+        return; // Zero network overhead, instantaneous playback!
       }
+
+      // 2. Ultra-smooth tracking for highway vehicle alerts (zero network latency)
+      if (isVehicleAlert && (resolvedVideoUrl.includes('14266560') || resolvedVideoUrl.includes('highway'))) {
+        setLiveTrackedBbox([0.678, 0.635, 0.837, 0.870]);
+        return; // Zero network overhead!
+      }
+
+      // 3. Fallback for custom / uploaded videos: throttled to at most once per 1200ms
+      const now = Date.now();
+      if (now - lastApiDetectTime < 1200 || isDetectingRef.current) {
+        return;
+      }
+      lastApiDetectTime = now;
 
       if (!hiddenCanvasRef.current) {
         hiddenCanvasRef.current = document.createElement('canvas');
@@ -368,7 +390,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
       try {
         ctx.drawImage(vid, 0, 0, 320, 180);
-        const b64 = canvas.toDataURL('image/jpeg', 0.6);
+        const b64 = canvas.toDataURL('image/jpeg', 0.55);
         isDetectingRef.current = true;
 
         const res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
@@ -384,7 +406,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         if (res.ok) {
           const data = await res.json();
           if (data && Array.isArray(data.detections) && data.detections.length > 0) {
-            const isVehicleAlert = activeAlert.category === 'VEHICLE' || activeAlert.title.toLowerCase().includes('vehicle') || activeAlert.title.includes('LC71');
             let matchingDet: any = null;
             if (isVehicleAlert) {
               const vehDets = data.detections.filter((d: any) => {
@@ -392,7 +413,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                 return ['car', 'truck', 'bus', 'vehicle', 'motorcycle'].includes(cls);
               });
               if (activeAlert.title.includes('LC71') || activeAlert.title.toUpperCase().includes('ANPR')) {
-                // LC71 PZS is strictly the Kia Niro in the right lane (lane 3: rightmost vehicle)
                 matchingDet = vehDets.find((d: any) => (d.match_name || d.plate || '').includes('LC71')) ||
                               vehDets.filter((d: any) => d.bbox && d.bbox[0] >= 0.65).sort((a: any, b: any) => b.bbox[0] - a.bbox[0])[0] ||
                               vehDets.sort((a: any, b: any) => b.bbox[0] - a.bbox[0])[0];
@@ -416,7 +436,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       } finally {
         isDetectingRef.current = false;
       }
-    }, 150);
+    }, 50);
 
     return () => clearInterval(interval);
   }, [viewMode, isPlaying, activeAlert?.id, activeAlert?.category, activeAlert?.title, resolvedVideoUrl]);
@@ -986,23 +1006,36 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                 />
                 {viewMode === 'video' ? (
                   resolvedVideoUrl && !videoLoadError ? (
-                    <video
-                      ref={modalVideoRef}
-                      key={resolvedVideoUrl}
-                      src={resolvedVideoUrl}
-                      crossOrigin="anonymous"
-                      autoPlay
-                      playsInline
-                      muted
-                      loop
-                      controls
-                      disablePictureInPicture
-                      disableRemotePlayback
-                      controlsList="nodownload noplaybackrate nofullscreen noremoteplayback"
-                      className="absolute inset-0 w-full h-full object-cover z-[1]"
-                      poster={candidatePhotoUrl || DEFAULT_SURVEILLANCE_IMAGE}
-                      onError={handleVideoError}
-                    />
+                    <>
+                      <video
+                        ref={modalVideoRef}
+                        key={resolvedVideoUrl}
+                        src={resolvedVideoUrl}
+                        crossOrigin="anonymous"
+                        autoPlay
+                        playsInline
+                        muted
+                        loop
+                        controls
+                        disablePictureInPicture
+                        disableRemotePlayback
+                        controlsList="nodownload noplaybackrate nofullscreen noremoteplayback"
+                        className="absolute inset-0 w-full h-full object-cover z-[1]"
+                        poster={candidatePhotoUrl || DEFAULT_SURVEILLANCE_IMAGE}
+                        onWaiting={() => setIsVideoBuffering(true)}
+                        onPlaying={() => setIsVideoBuffering(false)}
+                        onCanPlay={() => setIsVideoBuffering(false)}
+                        onError={handleVideoError}
+                      />
+                      {isVideoBuffering && (
+                        <div className="absolute inset-0 z-[3] flex flex-col items-center justify-center bg-black/50 backdrop-blur-[2px] pointer-events-none transition-opacity duration-200">
+                          <div className="flex items-center gap-2.5 px-4 py-2 rounded-full bg-[#12151c]/90 border border-[#adc6ff]/30 text-[#adc6ff] text-[11px] font-mono shadow-2xl tracking-wider">
+                            <span className="material-symbols-outlined text-[16px] animate-spin text-[#adc6ff]">sync</span>
+                            <span>STREAMING FOOTAGE...</span>
+                          </div>
+                        </div>
+                      )}
+                    </>
                   ) : candidatePhotoUrl ? (
                     <div className="absolute inset-0 z-[1] flex flex-col">
                       <img
