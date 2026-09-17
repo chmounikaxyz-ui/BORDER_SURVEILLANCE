@@ -254,7 +254,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
         const origin = apiBase.startsWith('http') ? apiBase.replace(/\/api\/?$/, '') : '';
         setVideoPreviewUrl(`${origin}/uploads/${result.filename}`);
       }
-      setDisplayMode('player');
+      setDisplayMode('stream');
 
       setJob({
         job_id: result.job_id,
@@ -288,6 +288,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       return;
     }
 
+    setDisplayMode('stream');
     setJob({
       job_id: result.job_id,
       status: 'queued',
@@ -322,7 +323,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     } else {
       setVideoPreviewUrl(`${origin}/samples/14266560_3840_2160_30fps.mp4`);
     }
-    setDisplayMode('player');
+    setDisplayMode('stream');
 
     setJob({
       job_id: result.job_id,
@@ -390,7 +391,8 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
           <div className="relative w-full h-[520px] rounded-xl overflow-hidden border border-[#424754]/30 bg-black shadow-xl flex items-center justify-center">
             {displayMode === 'stream' && (isRunning || isComplete) ? (
               <img
-                src={`${getApiBaseUrl()}/video/stream`}
+                key={job?.job_id || 'stream'}
+                src={`${getApiBaseUrl()}/video/stream?job_id=${job?.job_id || ''}&t=${job?.job_id || 'live'}`}
                 alt="AI Video Analysis Stream"
                 className="w-full h-full object-contain bg-black block"
               />

@@ -331,6 +331,9 @@ def health():
 def process_video(req: VideoJobRequest, background_tasks: BackgroundTasks):
     global _current_job_id
 
+    # Stop any running video detection tasks immediately to prevent cross-job collisions
+    engine.stop_all_jobs()
+
     job_id = f"job-{uuid.uuid4().hex[:8]}"
     now = datetime.now(timezone.utc).isoformat()
 
@@ -353,18 +356,27 @@ def process_video(req: VideoJobRequest, background_tasks: BackgroundTasks):
 def process_sample_video(background_tasks: BackgroundTasks, sample_type: Optional[str] = "highway"):
     """Run AI detection on existing uploaded surveillance video sample."""
     global _current_job_id
+
+    # Terminate any previously running job immediately
+    engine.stop_all_jobs()
+
     ensure_sample_videos()
-    mp4s = list(UPLOADS_DIR.glob("*.mp4")) + list(SAMPLES_DIR.glob("*.mp4"))
+    mp4s = list(SAMPLES_DIR.glob("*.mp4")) + list(UPLOADS_DIR.glob("*.mp4"))
     if not mp4s:
         raise HTTPException(
             status_code=404,
             detail="No sample video found on server. Please upload an MP4 video or check backend/samples."
         )
-    # Choose surveillance sample based on sample_type
+    # Choose surveillance sample deterministically based on sample_type
     if sample_type in ["intrusion", "perimeter", "suspicious"]:
-        sample = next((p for p in mp4s if "cctv_surveillance" in p.name or "0EEA47" in p.name), mp4s[0])
+        target = SAMPLES_DIR / "cctv_surveillance_sample.mp4"
+        if not target.exists():
+            target = next((p for p in mp4s if "cctv_surveillance" in p.name or "0EEA47" in p.name), mp4s[0])
     else:
-        sample = next((p for p in mp4s if "14266560" in p.name or "highway" in p.name), mp4s[0])
+        target = SAMPLES_DIR / "14266560_3840_2160_30fps.mp4"
+        if not target.exists():
+            target = next((p for p in mp4s if "14266560" in p.name or "highway" in p.name), mp4s[0])
+    sample = target
     sample_path = str(sample)
 
     job_id = f"job-{uuid.uuid4().hex[:8]}"
@@ -402,6 +414,9 @@ def process_sample_video(background_tasks: BackgroundTasks, sample_type: Optiona
 async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """Accept a video file upload from the browser, save to disk, and start detection."""
     global _current_job_id
+
+    # Stop any currently active job before starting an uploaded video
+    engine.stop_all_jobs()
 
     try:
         # Validate file type

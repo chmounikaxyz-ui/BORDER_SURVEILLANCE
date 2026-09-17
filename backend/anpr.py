@@ -327,8 +327,17 @@ def _extract_plate_candidates(crop: np.ndarray) -> List[str]:
     return list(dict.fromkeys(candidates))
 
 
+_WATCHLIST_PLATES_CACHE: Optional[List[dict]] = None
+_WATCHLIST_PLATES_TIME: float = 0.0
+
 def _load_watchlist_plates() -> List[dict]:
-    """Load plate numbers from watchlist_vehicles DB. Ensures default suspect targets if empty."""
+    """Load plate numbers from watchlist_vehicles DB with fast in-memory caching."""
+    global _WATCHLIST_PLATES_CACHE, _WATCHLIST_PLATES_TIME
+    import time
+    now_t = time.time()
+    if _WATCHLIST_PLATES_CACHE is not None and (now_t - _WATCHLIST_PLATES_TIME < 15.0):
+        return _WATCHLIST_PLATES_CACHE
+
     conn = get_conn()
     rows = conn.execute(
         "SELECT id, plate_number, threat_level, make, model, color FROM watchlist_vehicles"
@@ -357,8 +366,8 @@ def _load_watchlist_plates() -> List[dict]:
             "SELECT id, plate_number, threat_level, make, model, color FROM watchlist_vehicles"
         ).fetchall()
         conn.close()
-        plates = [dict(r) for r in rows]
-
+    _WATCHLIST_PLATES_CACHE = plates
+    _WATCHLIST_PLATES_TIME = now_t
     return plates
 
 

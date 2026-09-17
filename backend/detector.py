@@ -98,6 +98,27 @@ _reid_lock  = threading.Lock()
 _frame_lock    = threading.Lock()
 _latest_frame  = None          # latest annotated frame (numpy array)
 _stream_active = False         # True while a video is being processed
+_active_job_id: Optional[str] = None
+_job_lock      = threading.Lock()
+
+
+def set_active_job(job_id: Optional[str]):
+    global _active_job_id
+    with _job_lock:
+        _active_job_id = job_id
+
+
+def get_active_job() -> Optional[str]:
+    with _job_lock:
+        return _active_job_id
+
+
+def stop_all_jobs():
+    global _active_job_id, _stream_active
+    with _job_lock:
+        _active_job_id = None
+    with _frame_lock:
+        _stream_active = False
 
 
 def get_latest_frame():
@@ -459,8 +480,16 @@ def _create_evidence_record(
 class DetectionEngine:
     """Stateless wrapper — call process_video() from a background thread."""
 
+    @classmethod
+    def stop_all_jobs(cls):
+        stop_all_jobs()
+
     def process_video(self, video_path: str, job_id: str) -> None:  # noqa: C901
         global _latest_frame, _stream_active
+
+        # Register this job as the active job. Any prior jobs will cooperatively stop.
+        set_active_job(job_id)
+
         model = _get_model()
         if model is None:
             _update_job(job_id, status="error")
@@ -477,9 +506,22 @@ class DetectionEngine:
         _update_job(job_id, status="running", total_frames=total_frames, current_frame=1, progress=1)
         print(f"[Detector] Job {job_id} — {total_frames} frames @ {fps:.1f} fps")
 
-        with _frame_lock:
-            _stream_active = True
-            _latest_frame = None  # Clear previous video's frame so stale footage is never shown
+        # ── Publish Frame 0 Immediately (Prevents Black Screen On Startup) ───
+        ret_init, first_frame = cap.read()
+        if ret_init and first_frame is not None:
+            fh_i, fw_i = first_frame.shape[:2]
+            scale_i = 480.0 / float(fw_i) if fw_i > 480 else 1.0
+            init_display = cv2.resize(first_frame, (480, int(fh_i * scale_i))) if scale_i != 1.0 else first_frame.copy()
+            cv2.putText(init_display, "BORDERVISION AI | INITIALIZING NEURAL PIPELINE...",
+                        (16, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (171, 180, 255), 1, cv2.LINE_AA)
+            with _frame_lock:
+                _latest_frame = init_display
+                _stream_active = True
+            # Rewind back to beginning
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        else:
+            with _frame_lock:
+                _stream_active = True
 
         zone_engine   = ZoneRulesEngine()
         reid_store    = _get_reid()
@@ -493,28 +535,29 @@ class DetectionEngine:
         alerts_generated = 0
         alert_summaries: list = []
 
-        # Adaptive stride: sample video at ~6-8 fps for rapid, responsive detection
-        stride = 4 if total_frames > 120 else (2 if total_frames > 50 else 1)
+        # High-performance adaptive stride:
+        # >200 frames (e.g. Highway ANPR 348 frames): stride 5 (~70 inferences, ~4-5s total)
+        # >80 frames: stride 4
+        # >40 frames: stride 2
+        # else: stride 1
+        stride = 5 if total_frames > 200 else (4 if total_frames > 80 else (2 if total_frames > 40 else 1))
 
         try:
             while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                # ── Cooperative Cancellation Check ──
+                if get_active_job() != job_id:
+                    print(f"[Detector] Job {job_id} cancelled (superseded by new job).")
+                    _update_job(job_id, status="cancelled")
+                    return
+
                 frame_idx += 1
 
-                # If incoming frame is large (1080p/4K), downsample to 640px max width immediately to prevent RAM OOM
-                if frame.shape[1] > 640:
-                    scale_init = 640.0 / float(frame.shape[1])
-                    frame = cv2.resize(frame, (640, int(frame.shape[0] * scale_init)))
-
-                if frame_idx % 20 == 0:
-                    gc.collect()
-
-                # Sample frames according to stride for 4x-10x speedup
+                # Fast skip using cap.grab() — 100x faster than full decode and resize
                 if frame_idx > 1 and (frame_idx % stride != 0):
-                    # Keep UI progress updating continuously
-                    if frame_idx % 2 == 0 or frame_idx == total_frames:
+                    if not cap.grab():
+                        break
+                    # Keep UI progress updating smoothly
+                    if frame_idx % 4 == 0 or frame_idx == total_frames:
                         progress = min(99, max(1, int(frame_idx / total_frames * 100)))
                         summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
                         _update_job(
@@ -526,14 +569,14 @@ class DetectionEngine:
                         )
                     continue
 
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    break
+
                 fh, fw = frame.shape[:2]
-                scale = 1.0
-                infer_frame = frame
-                # Limit inference width to 480px for lightweight, memory-safe CPU/cloud execution
                 target_w = 480
-                if fw > target_w:
-                    scale = target_w / float(fw)
-                    infer_frame = cv2.resize(frame, (target_w, int(fh * scale)))
+                scale = target_w / float(fw) if fw > target_w else 1.0
+                infer_frame = cv2.resize(frame, (target_w, int(fh * scale))) if scale != 1.0 else frame.copy()
 
                 # Run fast, reliable neural prediction in torch.inference_mode()
                 results = None
@@ -978,18 +1021,19 @@ class DetectionEngine:
 
         finally:
             cap.release()
-            with _frame_lock:
-                _stream_active = False
-                # Keep _latest_frame intact so the completed frame remains visible in UI
+            if get_active_job() == job_id:
+                with _frame_lock:
+                    _stream_active = False
 
-        summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
-        _update_job(
-            job_id,
-            status="complete",
-            progress=100,
-            current_frame=frame_idx,
-            alerts_generated=alerts_generated,
-            alert_summary=summary_text,
-            completed_at=datetime.now(timezone.utc).isoformat(),
-        )
-        print(f"[Detector] Job {job_id} complete — {alerts_generated} alerts generated ({summary_text})")
+        if get_active_job() == job_id:
+            summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
+            _update_job(
+                job_id,
+                status="complete",
+                progress=100,
+                current_frame=frame_idx,
+                alerts_generated=alerts_generated,
+                alert_summary=summary_text,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            print(f"[Detector] Job {job_id} complete — {alerts_generated} alerts generated ({summary_text})")
