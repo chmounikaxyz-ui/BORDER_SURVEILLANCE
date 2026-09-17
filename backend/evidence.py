@@ -79,20 +79,6 @@ def save_evidence_frame(
             cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1,
         )
 
-    # ── HUD bottom bar directly on frame ─────────────────────────────────────
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    cv2.rectangle(annotated, (0, max(0, h - 32)), (w, h), (15, 15, 15), -1)
-    cv2.putText(
-        annotated, f"BORDERVISION AI  |  {alert_id}  |  {ts}",
-        (10, max(20, h - 11)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (173, 198, 255), 1,
-    )
-
-    # ── Alert header strip directly on frame ─────────────────────────────────
-    cv2.rectangle(annotated, (0, 0), (w, 30), (15, 15, 15), -1)
-    cv2.putText(
-        annotated, "!! RESTRICTED ZONE BREACH  |  EVIDENCE CAPTURE",
-        (10, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 100, 255), 1,
-    )
 
     # ── Write file ───────────────────────────────────────────────────────────
     filename = f"{alert_id}.jpg"

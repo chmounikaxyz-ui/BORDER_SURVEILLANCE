@@ -215,6 +215,12 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       setError('Please select a video file first.');
       return;
     }
+
+    if (selectedFile.size > 150 * 1024 * 1024) {
+      setError(`File is too large (${(selectedFile.size / (1024 * 1024)).toFixed(1)}MB). For cloud processing, please upload a video under 150MB or use the Preset Highway Surveillance sample.`);
+      return;
+    }
+
     setError(null);
     setIsUploading(true);
     setUploadProgress({ loaded: 0, total: selectedFile.size, percent: 0 });
@@ -228,8 +234,8 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       console.log('[VideoProcessor] Upload result:', result);
       setIsUploading(false);
 
-      if (!result) {
-        setError('Upload failed. Make sure the Python backend is running on port 8000.');
+      if (!result || result.error || !result.job_id) {
+        setError(result?.error || 'Upload failed. Please check network connection or verify video format.');
         setUploadProgress(null);
         return;
       }

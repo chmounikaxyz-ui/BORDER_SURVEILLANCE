@@ -367,7 +367,7 @@ const CameraFeedCell: React.FC<{
         } finally {
           isDetectingRef.current = false;
         }
-      }, 500);
+      }, 300);
 
       return () => clearInterval(interval);
     }, [isWebcam, aiOverlaysEnabled, cam?.id, cam?.code, cam?.imageUrl, cam?.status, cam?.hasAlert]);

@@ -365,12 +365,13 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
         save_path = UPLOADS_DIR / safe_name
         print(f"[Upload] Saving file as: {save_path}")
 
-        contents = await file.read()
-        print(f"[Upload] Read {len(contents)} bytes from uploaded file")
-
+        # Stream file in 1MB chunks to disk to prevent RAM spikes on Render
+        file_size = 0
         with open(save_path, "wb") as out_f:
-            out_f.write(contents)
-        print(f"[Upload] File saved successfully")
+            while chunk := await file.read(1024 * 1024):
+                file_size += len(chunk)
+                out_f.write(chunk)
+        print(f"[Upload] File saved successfully ({file_size} bytes)")
 
         # Create job and start detection in background
         job_id = f"job-{uuid.uuid4().hex[:8]}"
@@ -2157,15 +2158,15 @@ def detect_live_frame(body: FrameDetectRequest):
         tamper_type = None
         tamper_reason = ""
 
-        if mean_brightness < 12.0:
+        if mean_brightness < 20.0:
             is_tamper = True
             tamper_type = "BLACKOUT"
-            tamper_reason = f"Optical blackout detected. Lens blocked or dark environment (Mean: {mean_brightness:.1f})"
-        elif (mean_brightness < 65.0 and std_brightness < 15.0) or (std_brightness < 9.0 and lap_var < 35.0):
+            tamper_reason = f"Optical blackout detected. Lens covered or obstructed (Mean: {mean_brightness:.1f})"
+        elif (lap_var < 35.0 and std_brightness < 25.0) or (std_brightness < 16.0 and mean_brightness < 200.0) or (lap_var < 20.0 and mean_brightness < 160.0):
             is_tamper = True
             tamper_type = "OCCLUSION"
-            tamper_reason = f"Camera lens obstruction detected (Covered/Occluded). Flat textureless frame (Mean: {mean_brightness:.1f}, Std: {std_brightness:.1f})"
-        elif lap_var < 15.0 and mean_brightness < 120.0 and std_brightness < 12.0:
+            tamper_reason = f"Camera lens obstruction detected (Covered/Occluded). Lack of optical focus and edge contours (Mean: {mean_brightness:.1f}, Std: {std_brightness:.1f}, LapVar: {lap_var:.1f})"
+        elif lap_var < 15.0 and mean_brightness < 180.0:
             is_tamper = True
             tamper_type = "BLUR"
             tamper_reason = f"Optical lens smearing or defocus detected (Laplacian: {lap_var:.1f})"
