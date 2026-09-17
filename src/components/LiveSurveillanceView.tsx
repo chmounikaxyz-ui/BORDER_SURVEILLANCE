@@ -87,6 +87,7 @@ const CameraFeedCell: React.FC<{
     const headerChunkRef = useRef<Blob | null>(null);
     const videoChunksRef = useRef<Blob[]>([]);
     const isDetectingRef = useRef(false);
+    const lastDetectionTimeRef = useRef(0);
     const [webcamError, setWebcamError] = useState<string | null>(null);
     const [liveDetections, setLiveDetections] = useState<{ class: string; confidence: number; bbox: number[]; match_name?: string; match_score?: number }[]>([]);
     const [tamperInfo, setTamperInfo] = useState<{ type: string; reason: string } | null>(null);
@@ -313,21 +314,30 @@ const CameraFeedCell: React.FC<{
 
           if (payload) {
             let res: Response;
+            const controller = new AbortController();
+            const abortTimeout = setTimeout(() => controller.abort(), 2400);
+
             try {
-              res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-              });
-            } catch {
-              res = await fetch('/api/detect/frame', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-              });
+              try {
+                res = await fetch(`${getApiBaseUrl()}/detect/frame`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload),
+                  signal: controller.signal
+                });
+              } catch {
+                res = await fetch('/api/detect/frame', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload),
+                  signal: controller.signal
+                });
+              }
+            } finally {
+              clearTimeout(abortTimeout);
             }
 
-            if (res.ok) {
+            if (res && res.ok) {
               const data = await res.json();
               if (data.tamper_detected) {
                 setTamperInfo({ type: data.tamper_type, reason: data.tamper_reason });
@@ -360,7 +370,13 @@ const CameraFeedCell: React.FC<{
               }
 
               if (data && Array.isArray(data.detections)) {
-                setLiveDetections(data.detections);
+                if (data.detections.length > 0) {
+                  setLiveDetections(data.detections);
+                  lastDetectionTimeRef.current = Date.now();
+                } else if (Date.now() - lastDetectionTimeRef.current > 1200) {
+                  setLiveDetections([]);
+                }
+
                 if (data.alert_created && data.new_alert) {
                   window.dispatchEvent(new CustomEvent('border_vision_alert_triggered', { detail: data.new_alert }));
                   // Asynchronously upload recorded video clip in background without blocking frame detection
@@ -387,16 +403,21 @@ const CameraFeedCell: React.FC<{
               }
             }
           }
-          setLiveDetections([]);
+          if (Date.now() - lastDetectionTimeRef.current > 1200) {
+            setLiveDetections([]);
+          }
         } catch (err) {
           // Network or frame grab error
+          if (Date.now() - lastDetectionTimeRef.current > 1500) {
+            setLiveDetections([]);
+          }
         } finally {
           isDetectingRef.current = false;
         }
-      }, 300);
+      }, 350);
 
       return () => clearInterval(interval);
-    }, [isWebcam, aiOverlaysEnabled, cam?.id, cam?.code, cam?.imageUrl, cam?.status, cam?.hasAlert]);
+    }, [isWebcam, aiOverlaysEnabled, cam?.id, cam?.code, cam?.imageUrl, cam?.status]);
 
     const borderColor = cam?.hasAlert
       ? 'border-[#ffb4ab]'
