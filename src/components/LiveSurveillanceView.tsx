@@ -230,17 +230,17 @@ const CameraFeedCell: React.FC<{
       try {
         const videoBase64 = await getRollingVideoBase64();
         const canvas = canvasRef.current || document.createElement('canvas');
-        canvas.width = 640;
-        canvas.height = 360;
+        canvas.width = 480;
+        canvas.height = 270;
         const ctx = canvas.getContext('2d');
         let dataUrl = "";
         if (ctx) {
           if (videoRef.current && videoRef.current.readyState >= 2) {
-            ctx.drawImage(videoRef.current, 0, 0, 640, 360);
+            ctx.drawImage(videoRef.current, 0, 0, 480, 270);
           } else if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
-            ctx.drawImage(imgRef.current, 0, 0, 640, 360);
+            ctx.drawImage(imgRef.current, 0, 0, 480, 270);
           }
-          dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+          dataUrl = canvas.toDataURL('image/jpeg', 0.5);
         }
 
         const payload = {
@@ -269,7 +269,7 @@ const CameraFeedCell: React.FC<{
       }
     };
 
-    // Live frame detection loop (POST lightweight canvas frames to backend every 600ms)
+    // Live frame detection loop (POST lightweight canvas frames to backend every 350ms)
     useEffect(() => {
       if (!aiOverlaysEnabled || !cam) return;
       if (!isWebcam && cam.status !== 'online') return;
@@ -283,22 +283,22 @@ const CameraFeedCell: React.FC<{
 
           if (isWebcam && videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
             const canvas = canvasRef.current || document.createElement('canvas');
-            canvas.width = 640;
-            canvas.height = 360;
+            canvas.width = 480;
+            canvas.height = 270;
             const ctx = canvas.getContext('2d');
             if (ctx) {
-              ctx.drawImage(videoRef.current, 0, 0, 640, 360);
-              dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+              ctx.drawImage(videoRef.current, 0, 0, 480, 270);
+              dataUrl = canvas.toDataURL('image/jpeg', 0.5);
             }
           } else if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
             try {
               const canvas = canvasRef.current || document.createElement('canvas');
-              canvas.width = 640;
-              canvas.height = 360;
+              canvas.width = 480;
+              canvas.height = 270;
               const ctx = canvas.getContext('2d');
               if (ctx) {
-                ctx.drawImage(imgRef.current, 0, 0, 640, 360);
-                dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+                ctx.drawImage(imgRef.current, 0, 0, 480, 270);
+                dataUrl = canvas.toDataURL('image/jpeg', 0.5);
               }
             } catch (e) {
               // Cross-origin image fallback
