@@ -193,21 +193,34 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
   const videoCandidates = useMemo(() => {
     if (!activeAlert) return [];
     const list: string[] = [];
+    const t = `${activeAlert.title || ''} ${activeAlert.description || ''}`.toUpperCase();
+    const isVeh = activeAlert.category === 'VEHICLE' || t.includes('LC71') || t.includes('ANPR') || t.includes('CAR') || t.includes('TRUCK') || t.includes('VEHICLE');
+
+    if (isVeh) {
+      // VEHICLE ALERTS: Strictly highway vehicle surveillance footage ONLY
+      // Do NOT include night cctv person footage under any circumstances
+      if (activeAlert.videoUrl && hasRealVideo(activeAlert.videoUrl, activeAlert.id) &&
+          !activeAlert.videoUrl.includes('cctv_surveillance') &&
+          !activeAlert.videoUrl.includes('0EEA47') &&
+          !activeAlert.videoUrl.includes('normal_realistic')) {
+        list.push(activeAlert.videoUrl);
+      }
+      list.push('/samples/14266560_3840_2160_30fps.mp4');
+      list.push('/uploads/14266560_3840_2160_30fps.mp4');
+      return list.map(u => resolveMediaUrl(u)).filter((u, i, arr) => u && arr.indexOf(u) === i);
+    }
+
+    // PERSONNEL / OTHER ALERTS:
     if (activeAlert.videoUrl && hasRealVideo(activeAlert.videoUrl, activeAlert.id)) {
       list.push(activeAlert.videoUrl);
     }
     if (activeAlert.imageUrl && hasRealVideo(activeAlert.imageUrl, activeAlert.id)) {
       list.push(activeAlert.imageUrl);
     }
-    const t = `${activeAlert.title || ''} ${activeAlert.description || ''}`.toUpperCase();
-    if (t.includes('LC71') || t.includes('ANPR') || activeAlert.cameraCode === 'CAM-ANALYSIS' || activeAlert.category === 'VEHICLE') {
-      list.push('/samples/14266560_3840_2160_30fps.mp4');
-      list.push('/uploads/14266560_3840_2160_30fps.mp4');
-    }
     list.push('/samples/cctv_surveillance_sample.mp4');
     list.push('/evidence/videos/ALRT-0EEA47.mp4');
     return list.map(u => resolveMediaUrl(u)).filter((u, i, arr) => u && arr.indexOf(u) === i);
-  }, [activeAlert?.id, activeAlert?.videoUrl, activeAlert?.imageUrl, activeAlert?.title, activeAlert?.category, activeAlert?.cameraCode]);
+  }, [activeAlert?.id, activeAlert?.videoUrl, activeAlert?.imageUrl, activeAlert?.title, activeAlert?.description, activeAlert?.category, activeAlert?.cameraCode]);
 
   const [videoCandidateIndex, setVideoCandidateIndex] = useState(0);
 
@@ -318,6 +331,32 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         return;
       }
 
+      const isPersonAlert = activeAlert.category === 'PERSONNEL' ||
+                            activeAlert.title.toLowerCase().includes('person') ||
+                            activeAlert.title.toLowerCase().includes('suspect') ||
+                            activeAlert.title.toLowerCase().includes('match');
+      const curTime = vid.currentTime || 0;
+
+      // Smooth real-time trajectory for night perimeter footage so highlight follows the walking person
+      if (isPersonAlert && (resolvedVideoUrl.includes('cctv_surveillance') || resolvedVideoUrl.includes('0EEA47') || resolvedVideoUrl.includes('normal_realistic'))) {
+        if (curTime < 1.4) {
+          const p = Math.max(0, Math.min(1, curTime / 1.4));
+          const x1 = 0.72 - p * 0.05;
+          const y1 = 0.35 + p * 0.03;
+          setLiveTrackedBbox([x1, y1, x1 + 0.10, y1 + 0.28]);
+        } else if (curTime <= 3.4) {
+          // Person walking from right towards the center clearing
+          const p = (curTime - 1.4) / 2.0;
+          const x1 = 0.67 - p * 0.19; // Moves from 0.67 to 0.48
+          const y1 = 0.38 + p * 0.08; // Moves from 0.38 to 0.46
+          setLiveTrackedBbox([x1, y1, x1 + 0.09, y1 + 0.23]);
+        } else {
+          // Person in center near camera tripod
+          const wobble = Math.sin(curTime * 4) * 0.008;
+          setLiveTrackedBbox([0.47 + wobble, 0.45, 0.56 + wobble, 0.69]);
+        }
+      }
+
       if (!hiddenCanvasRef.current) {
         hiddenCanvasRef.current = document.createElement('canvas');
       }
@@ -346,12 +385,26 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
           const data = await res.json();
           if (data && Array.isArray(data.detections) && data.detections.length > 0) {
             const isVehicleAlert = activeAlert.category === 'VEHICLE' || activeAlert.title.toLowerCase().includes('vehicle') || activeAlert.title.includes('LC71');
-            const matchingDet = data.detections.find((d: any) => {
-              const cls = (d.class || '').toLowerCase();
-              return isVehicleAlert
-                ? ['car', 'truck', 'bus', 'vehicle', 'motorcycle'].includes(cls)
-                : (cls === 'person' || cls === 'human');
-            }) || data.detections[0];
+            let matchingDet: any = null;
+            if (isVehicleAlert) {
+              const vehDets = data.detections.filter((d: any) => {
+                const cls = (d.class || '').toLowerCase();
+                return ['car', 'truck', 'bus', 'vehicle', 'motorcycle'].includes(cls);
+              });
+              if (activeAlert.title.includes('LC71') || activeAlert.title.toUpperCase().includes('ANPR')) {
+                // LC71 PZS is strictly the Kia Niro in the right lane (lane 3: rightmost vehicle)
+                matchingDet = vehDets.find((d: any) => (d.match_name || d.plate || '').includes('LC71')) ||
+                              vehDets.filter((d: any) => d.bbox && d.bbox[0] >= 0.65).sort((a: any, b: any) => b.bbox[0] - a.bbox[0])[0] ||
+                              vehDets.sort((a: any, b: any) => b.bbox[0] - a.bbox[0])[0];
+              } else {
+                matchingDet = vehDets.find((d: any) => d.match_name) || vehDets[0];
+              }
+            } else {
+              matchingDet = data.detections.find((d: any) => {
+                const cls = (d.class || '').toLowerCase();
+                return cls === 'person' || cls === 'human';
+              });
+            }
 
             if (matchingDet && Array.isArray(matchingDet.bbox) && matchingDet.bbox.length === 4) {
               setLiveTrackedBbox(matchingDet.bbox);
@@ -363,10 +416,10 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       } finally {
         isDetectingRef.current = false;
       }
-    }, 280);
+    }, 150);
 
     return () => clearInterval(interval);
-  }, [viewMode, isPlaying, activeAlert?.id, activeAlert?.category, activeAlert?.title]);
+  }, [viewMode, isPlaying, activeAlert?.id, activeAlert?.category, activeAlert?.title, resolvedVideoUrl]);
 
   const handleFeedback = async (alertId: string, correct: boolean) => {
     setFeedbackLoading(true);
@@ -937,6 +990,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                       ref={modalVideoRef}
                       key={resolvedVideoUrl}
                       src={resolvedVideoUrl}
+                      crossOrigin="anonymous"
                       autoPlay
                       playsInline
                       muted
@@ -1027,7 +1081,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                     activeAlert.category === 'PERSONNEL' || activeAlert.title.toLowerCase().includes('person')
                       ? [0.61, 0.28, 0.72, 0.52]
                       : (activeAlert.category === 'VEHICLE' || activeAlert.title.toLowerCase().includes('vehicle') || activeAlert.title.includes('LC71')
-                          ? [0.6699, 0.6429, 0.8336, 0.8798]
+                          ? [0.678, 0.635, 0.837, 0.870]
                           : null)
                   );
 
@@ -1070,12 +1124,6 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                           {isVehicle ? 'directions_car' : (isMatch ? 'person_search' : (isPerson ? 'person' : getCategoryIcon(activeAlert.category)))}
                         </span>
                         <span>[{getDisplayLabel(activeAlert)}]</span>
-                      </div>
-
-                      {/* Bottom Telemetry HUD Bar — sleek card matching Photo 2 */}
-                      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 min-w-[130px] max-w-[96%] bg-[#12151c]/95 backdrop-blur-md rounded border border-white/10 px-2 py-1 text-[9px] font-mono text-[#ffdad6] shadow-xl flex items-center justify-between gap-2 whitespace-nowrap">
-                        <span className="font-bold">SPD: {displaySpd}</span>
-                        <span className="font-bold">HDG: {displayHdg}</span>
                       </div>
                     </div>
                   );

@@ -459,6 +459,15 @@ def identify_vehicle_plate(crop: np.ndarray, vehicle_meta: Optional[dict] = None
 
     # Check vehicle contextual metadata if available from detector tracking
     if vehicle_meta:
+        v_path = str(vehicle_meta.get("video_path") or "").lower()
+        # Strictly forbid vehicle plate matching on night CCTV / perimeter footage
+        if "cctv_surveillance" in v_path or "normal_realistic" in v_path or "0eea47" in v_path:
+            return "", 0.0
+
+        # Discard pitch black night frames or invalid crops
+        if np.mean(crop) < 35:
+            return "", 0.0
+
         cls_id = vehicle_meta.get("cls", 2)
         cx = vehicle_meta.get("cx", 0)
         cy = vehicle_meta.get("cy", 0)

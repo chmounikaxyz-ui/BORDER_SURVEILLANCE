@@ -426,72 +426,86 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                     preserveAspectRatio="none"
                     viewBox="0 0 1000 600"
                   >
-                    {liveDetections.map((det, idx) => {
-                      const [nx1, ny1, nx2, ny2] = det.bbox;
-                      const x = nx1 * 1000;
-                      const y = ny1 * 600;
-                      const w = Math.max(20, (nx2 - nx1) * 1000);
-                      const h = Math.max(20, (ny2 - ny1) * 600);
-                      const matchName = det.match_name;
-                      const matchScoreRaw = det.match_score;
-                      const matchScore = matchScoreRaw !== undefined && matchScoreRaw !== null
-                        ? (matchScoreRaw > 1 ? Math.round(matchScoreRaw) : Math.round(matchScoreRaw * 100))
-                        : (det.confidence ? (det.confidence > 1 ? Math.round(det.confidence) : Math.round(det.confidence * 100)) : 94);
-                      const isPerson = (det.class || '').toLowerCase().includes('person');
-                      const labelText = matchName
-                        ? `WATCHLIST MATCH: ${matchName.toUpperCase()} (${matchScore}%)`
-                        : isPerson
-                        ? `SUSPICIOUS BEHAVIOR: PERSON (${matchScore}%)`
-                        : `${(det.class || 'TARGET').toUpperCase()} (${matchScore}%)`;
-                      const color = '#ff3333';
+                    {liveDetections
+                      .filter(det => {
+                        const isPerson = (det.class || '').toLowerCase().includes('person');
+                        const isVeh = (det.class || '').toLowerCase().includes('car') ||
+                                      (det.class || '').toLowerCase().includes('truck') ||
+                                      (det.class || '').toLowerCase().includes('vehicle') ||
+                                      (det.class || '').toLowerCase().includes('bus');
+                        // Strictly only show detected target car or suspicious person; suppress background traffic
+                        if (isVeh && !det.match_name && !(det.plate)) return false;
+                        return true;
+                      })
+                      .map((det, idx) => {
+                        const [nx1, ny1, nx2, ny2] = det.bbox;
+                        const x = nx1 * 1000;
+                        const y = ny1 * 600;
+                        const w = Math.max(20, (nx2 - nx1) * 1000);
+                        const h = Math.max(20, (ny2 - ny1) * 600);
+                        const matchName = det.match_name || det.plate;
+                        const matchScoreRaw = det.match_score;
+                        const matchScore = matchScoreRaw !== undefined && matchScoreRaw !== null
+                          ? (matchScoreRaw > 1 ? Math.round(matchScoreRaw) : Math.round(matchScoreRaw * 100))
+                          : (det.confidence ? (det.confidence > 1 ? Math.round(det.confidence) : Math.round(det.confidence * 100)) : 53);
+                        const isPerson = (det.class || '').toLowerCase().includes('person');
 
-                      return (
-                        <g key={idx} className="transition-all duration-200 ease-out">
-                          {/* Tactical Bounding Box */}
-                          <rect
-                            x={x}
-                            y={y}
-                            width={w}
-                            height={h}
-                            fill="rgba(255, 51, 51, 0.22)"
-                            stroke={color}
-                            strokeWidth="3.5"
-                            className="animate-pulse transition-all duration-200 ease-out"
-                          />
-                          {/* Corner Reticles */}
-                          <path
-                            d={`M${x},${y + 18} L${x},${y} L${x + 18},${y} M${x + w - 18},${y} L${x + w},${y} L${x + w},${y + 18} M${x + w},${y + h - 18} L${x + w},${y + h} L${x + w - 18},${y + h} M${x + 18},${y + h} L${x},${y + h} L${x},${y + h - 18}`}
-                            fill="none"
-                            stroke={color}
-                            strokeWidth="3.5"
-                            className="transition-all duration-200 ease-out"
-                          />
-                          {/* Label Badge */}
-                          <rect
-                            x={x}
-                            y={Math.max(0, y - 26)}
-                            width={Math.max(160, labelText.length * 8.5 + 18)}
-                            height="24"
-                            fill="#0b1422"
-                            stroke={color}
-                            strokeWidth="1.5"
-                            rx="3"
-                            className="transition-all duration-200 ease-out"
-                          />
-                          <text
-                            x={x + 6}
-                            y={Math.max(16, y - 9)}
-                            fill="#ff4d4d"
-                            fontSize="11"
-                            fontFamily="monospace"
-                            fontWeight="bold"
-                            className="transition-all duration-200 ease-out"
-                          >
-                            [{labelText}]
-                          </text>
-                        </g>
-                      );
-                    })}
+                        let badgeText = '';
+                        if (matchName) {
+                          const cleanP = matchName.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+                          badgeText = `[PLATE: ${cleanP} (${matchScore}%)]`;
+                        } else if (isPerson) {
+                          badgeText = `[SUSPECT: PERSON (${matchScore}%)]`;
+                        } else {
+                          badgeText = `[${(det.class || 'TARGET').toUpperCase()} (${matchScore}%)]`;
+                        }
+
+                        const badgeW = Math.max(160, badgeText.length * 8.2 + 20);
+                        const pillW = 144;
+                        const pillX = x + (w - pillW) / 2;
+                        const pillY = Math.max(y + 6, y + h - 26);
+
+                        return (
+                          <g key={idx} className="transition-all duration-200 ease-out pointer-events-none">
+                            {/* Photo 3 Tactical Coral Bounding Box */}
+                            <rect
+                              x={x}
+                              y={y}
+                              width={w}
+                              height={h}
+                              fill="rgba(255, 180, 171, 0.06)"
+                              stroke="#ffb4ab"
+                              strokeWidth="2"
+                              rx="4"
+                              className="transition-all duration-200 ease-out"
+                            />
+
+                            {/* Photo 3 Top Badge: Solid Coral Background */}
+                            <rect
+                              x={x}
+                              y={Math.max(0, y - 24)}
+                              width={badgeW}
+                              height="24"
+                              fill="#ffb4ab"
+                              rx="3"
+                              className="transition-all duration-200 ease-out"
+                            />
+                            {/* Photo 3 Top Badge Text: Deep Dark Maroon */}
+                            <text
+                              x={x + 6}
+                              y={Math.max(16, y - 8)}
+                              fill="#410002"
+                              fontSize="11"
+                              fontFamily="monospace"
+                              fontWeight="bold"
+                              letterSpacing="0.5"
+                              className="transition-all duration-200 ease-out"
+                            >
+                              {badgeText}
+                            </text>
+                          </g>
+                        );
+                      })}
                   </svg>
                 )}
               </>
@@ -658,7 +672,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                   type="button"
                   onClick={() => handleSampleStart('highway')}
                   disabled={isStarting || isRunning}
-                  className="py-2.5 px-3 bg-[#222a39] hover:bg-[#2c3544] border border-[#adc6ff]/30 text-[#adc6ff] font-bold rounded-lg text-[11px] uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-sm"
+                  className="py-2.5 px-3 bg-[#222a39] hover:bg-[#2c3544] border border-[#adc6ff]/30 hover:border-[#adc6ff]/60 text-[#adc6ff] font-bold rounded-lg text-[11px] uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-sm"
                 >
                   <span className={`material-symbols-outlined text-[16px] ${isStarting ? 'animate-spin' : ''}`}>
                     {isStarting ? 'sync' : 'directions_car'}
@@ -670,10 +684,10 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
                   type="button"
                   onClick={() => handleSampleStart('intrusion')}
                   disabled={isStarting || isRunning}
-                  className="py-2.5 px-3 bg-[#222a39] hover:bg-[#2c3544] border border-[#ffb4ab]/30 text-[#ffb4ab] font-bold rounded-lg text-[11px] uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-sm"
+                  className="py-2.5 px-3 bg-[#222a39] hover:bg-[#2c3544] border border-[#adc6ff]/30 hover:border-[#adc6ff]/60 text-[#adc6ff] font-bold rounded-lg text-[11px] uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-sm"
                 >
                   <span className={`material-symbols-outlined text-[16px] ${isStarting ? 'animate-spin' : ''}`}>
-                    {isStarting ? 'sync' : 'night_sight'}
+                    {isStarting ? 'sync' : 'dark_mode'}
                   </span>
                   <span>Night Perimeter Preset</span>
                 </button>

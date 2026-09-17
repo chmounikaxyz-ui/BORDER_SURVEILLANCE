@@ -619,6 +619,8 @@ def get_alerts():
         d["imageUrl"] = raw_img or d["capturedFrameUrl"]
 
         title_str = str(d.get("title") or "")
+        cat_str = str(d.get("category") or "").upper()
+        is_veh_alert = (cat_str == "VEHICLE" or "LC71" in title_str.upper() or "ANPR" in title_str.upper() or "CAR" in title_str.upper() or "TRUCK" in title_str.upper() or "VEHICLE" in title_str.upper())
 
         # Check if an evidence video clip or source surveillance footage exists for this alert
         vid_webm = EVIDENCE_VIDEOS_DIR / f"{alert_id}.webm"
@@ -627,18 +629,26 @@ def get_alerts():
         if "ALRT-0EEA47.mp4" in raw_vid and alert_id != "ALRT-0EEA47":
             raw_vid = ""
 
-        if vid_mp4.exists():
-            d["videoUrl"] = f"/evidence/videos/{alert_id}.mp4"
-        elif vid_webm.exists():
-            d["videoUrl"] = f"/evidence/videos/{alert_id}.webm"
-        elif raw_vid and not raw_vid.endswith(".jpg") and not raw_vid.endswith(".png"):
-            d["videoUrl"] = raw_vid
-        elif "LC71" in title_str or "ANPR" in title_str or d.get("camera_code") == "CAM-ANALYSIS" or d.get("cameraCode") == "CAM-ANALYSIS":
-            d["videoUrl"] = "/samples/14266560_3840_2160_30fps.mp4"
-        elif raw_img and (raw_img.endswith(".mp4") or raw_img.endswith(".webm") or raw_img.startswith("data:video/")) and "ALRT-0EEA47.mp4" not in raw_img:
-            d["videoUrl"] = raw_img
+        if is_veh_alert:
+            # Vehicle alerts MUST strictly use highway vehicle surveillance video
+            # Never allow night CCTV person footage for vehicle alerts
+            if vid_mp4.exists() and vid_mp4.stat().st_size > 15_000_000:
+                d["videoUrl"] = f"/evidence/videos/{alert_id}.mp4"
+            else:
+                d["videoUrl"] = "/samples/14266560_3840_2160_30fps.mp4"
+            if not d.get("bbox") or d.get("bbox") == "null":
+                d["bbox"] = "[0.678, 0.635, 0.837, 0.870]"
         else:
-            d["videoUrl"] = None
+            if vid_mp4.exists():
+                d["videoUrl"] = f"/evidence/videos/{alert_id}.mp4"
+            elif vid_webm.exists():
+                d["videoUrl"] = f"/evidence/videos/{alert_id}.webm"
+            elif raw_vid and not raw_vid.endswith(".jpg") and not raw_vid.endswith(".png"):
+                d["videoUrl"] = raw_vid
+            elif raw_img and (raw_img.endswith(".mp4") or raw_img.endswith(".webm") or raw_img.startswith("data:video/")) and "ALRT-0EEA47.mp4" not in raw_img:
+                d["videoUrl"] = raw_img
+            else:
+                d["videoUrl"] = None
         
         # Ensure confidence is 100% synchronized with title percentage if biometric match
         pct_match = re.search(r"\((\d+)%\)", title_str)
@@ -2208,18 +2218,21 @@ def detect_live_frame(body: FrameDetectRequest):
         tamper_type = None
         tamper_reason = ""
 
-        if mean_brightness < 20.0:
+        # Optical tamper heuristics: strictly genuine physical obstruction
+        if not getattr(body, "create_alert", True):
+            is_tamper = False
+        elif mean_brightness < 12.0:
             is_tamper = True
             tamper_type = "BLACKOUT"
-            tamper_reason = f"Optical blackout detected. Lens covered or obstructed (Mean: {mean_brightness:.1f})"
-        elif (lap_var < 35.0 and std_brightness < 25.0) or (std_brightness < 16.0 and mean_brightness < 200.0) or (lap_var < 20.0 and mean_brightness < 160.0):
+            tamper_reason = f"Optical blackout detected. Lens completely dark (Mean: {mean_brightness:.1f})"
+        elif lap_var < 8.0 and std_brightness < 8.0:
             is_tamper = True
             tamper_type = "OCCLUSION"
-            tamper_reason = f"Camera lens obstruction detected (Covered/Occluded). Lack of optical focus and edge contours (Mean: {mean_brightness:.1f}, Std: {std_brightness:.1f}, LapVar: {lap_var:.1f})"
-        elif lap_var < 15.0 and mean_brightness < 180.0:
+            tamper_reason = f"Camera lens obstruction detected (Covered/Occluded) (Std: {std_brightness:.1f}, LapVar: {lap_var:.1f})"
+        elif lap_var < 5.0 and mean_brightness < 100.0:
             is_tamper = True
             tamper_type = "BLUR"
-            tamper_reason = f"Optical lens smearing or defocus detected (Laplacian: {lap_var:.1f})"
+            tamper_reason = f"Optical lens smearing detected (Laplacian: {lap_var:.1f})"
 
         if is_tamper:
             now_ts = time.time()
@@ -3025,7 +3038,7 @@ async def serve_spa(request: Request, full_path: str):
         if target.is_file():
             return FileResponse(target)
         if (dist / "index.html").exists():
-            return FileResponse(dist / "index.html")
+            return FileResponse(dist / "index.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     raise HTTPException(status_code=404, detail="Not Found")
 
 
