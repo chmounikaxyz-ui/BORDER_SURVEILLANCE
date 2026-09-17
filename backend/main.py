@@ -610,6 +610,8 @@ def get_alerts():
 
         d["imageUrl"] = raw_img or d["capturedFrameUrl"]
 
+        title_str = str(d.get("title") or "")
+
         # Check if an evidence video clip or source surveillance footage exists for this alert
         vid_webm = EVIDENCE_VIDEOS_DIR / f"{alert_id}.webm"
         vid_mp4 = EVIDENCE_VIDEOS_DIR / f"{alert_id}.mp4"
@@ -631,7 +633,6 @@ def get_alerts():
             d["videoUrl"] = None
         
         # Ensure confidence is 100% synchronized with title percentage if biometric match
-        title_str = d.get("title", "")
         pct_match = re.search(r"\((\d+)%\)", title_str)
         if pct_match:
             d["confidence"] = round(int(pct_match.group(1)) / 100.0, 2)
