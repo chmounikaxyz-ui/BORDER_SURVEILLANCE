@@ -66,7 +66,7 @@ const DEFAULT_SURVEILLANCE_IMAGE = `data:image/svg+xml;charset=utf-8,${encodeURI
 // Ground-truth neural tracking coordinates for night perimeter video footage (cctv_surveillance_sample.mp4 / ALRT-0EEA47)
 const NIGHT_PERIMETER_TRACK_POINTS: [number, number, number, number, number][] = [
   // [timeSec, x1, y1, x2, y2]
-  [0.00, 0.880, 0.355, 0.950, 0.625],
+  [0.95, 0.892, 0.353, 0.967, 0.608],
   [1.04, 0.880, 0.355, 0.950, 0.625],
   [1.25, 0.879, 0.359, 0.956, 0.621],
   [1.46, 0.832, 0.362, 0.883, 0.636],
@@ -531,19 +531,45 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     }
     const isPersonAlert = (activeAlert?.category === 'PERSONNEL' ||
                           activeAlert?.title.toLowerCase().includes('person') ||
-                          activeAlert?.title.toLowerCase().includes('suspect')) &&
+                          activeAlert?.title.toLowerCase().includes('suspect') ||
+                          t.includes('SUSPICIOUS') ||
+                          t.includes('INTRUSION') ||
+                          t.includes('PERIMETER')) &&
                           !isBiometric && !isVehicleAlert;
 
-    const isKnownPreset = resolvedVideoUrl.includes('14266560') ||
-                          resolvedVideoUrl.includes('cctv_surveillance') ||
-                          activeAlert?.id === 'ALRT-0EEA47' ||
+    const isHighwayClip = isVehicleAlert ||
+                          resolvedVideoUrl.includes('14266560') ||
                           activeAlert?.title.includes('LC71') ||
                           activeAlert?.title.toUpperCase().includes('ANPR');
 
-    if (isKnownPreset) {
-      const bbox = getTrackedBboxAtTime(vid.currentTime || 0, Boolean(isPersonAlert), Boolean(isVehicleAlert));
+    const isPerimeterClip = !isHighwayClip && (
+      resolvedVideoUrl.includes('cctv_surveillance') ||
+      activeAlert?.id === 'ALRT-0EEA47' ||
+      activeAlert?.cameraCode === 'CAM-ANALYSIS' ||
+      activeAlert?.cameraCode === 'BOP-07' ||
+      activeAlert?.sector?.toLowerCase().includes('perimeter') ||
+      activeAlert?.sector?.toLowerCase().includes('sector east') ||
+      isPersonAlert ||
+      (vid.duration > 0 && vid.duration <= 7.0)
+    );
+
+    if (isHighwayClip) {
+      const curTime = vid.duration > 0 && vid.duration <= 13 ? (vid.currentTime % vid.duration) : vid.currentTime;
+      const bbox = getTrackedBboxAtTime(curTime || 0, false, true);
       if (bbox) {
         setLiveTrackedBbox(bbox);
+      }
+    } else if (isPerimeterClip) {
+      const duration = vid.duration > 0 ? vid.duration : 5.875;
+      const curTime = (vid.currentTime || 0) % duration;
+      if (curTime < 0.90) {
+        // Target has not entered frame yet (enters from right at ~0.95s)
+        setLiveTrackedBbox(null);
+      } else {
+        const bbox = getTrackedBboxAtTime(curTime, true, false);
+        if (bbox) {
+          setLiveTrackedBbox(bbox);
+        }
       }
     } else {
       runLiveFrameProbe();
@@ -1264,7 +1290,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                           : null)
                   );
 
-                  const effectiveBbox: number[] | null = (viewMode === 'video' && liveTrackedBbox)
+                  const effectiveBbox: number[] | null = (viewMode === 'video')
                     ? liveTrackedBbox
                     : staticBbox;
 

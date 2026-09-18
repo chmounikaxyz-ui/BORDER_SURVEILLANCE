@@ -2420,7 +2420,7 @@ def detect_live_frame(body: FrameDetectRequest):
                 try:
                     import torch
                     with torch.inference_mode():
-                        results = model.predict(img, conf=0.20, imgsz=256, verbose=False)
+                        results = model.predict(img, conf=0.35, imgsz=480, verbose=False)
                     if results and results[0].boxes:
                         for box in results[0].boxes:
                             cls_id = int(box.cls[0])

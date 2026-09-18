@@ -309,7 +309,7 @@ export async function getSystemTelemetry(): Promise<SystemTelemetryData | null> 
 
 export interface VideoJob {
   job_id: string;
-  status: 'idle' | 'queued' | 'running' | 'complete' | 'error';
+  status: 'idle' | 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
   progress: number;
   current_frame: number;
   total_frames: number;
