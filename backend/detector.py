@@ -588,7 +588,7 @@ class DetectionEngine:
         # >60 frames: stride 5
         # >30 frames: stride 2
         # else: stride 1
-        stride = 12 if total_frames > 300 else (8 if total_frames > 150 else (5 if total_frames > 60 else (2 if total_frames > 30 else 1)))
+        stride = 12 if total_frames > 300 else (8 if total_frames > 120 else (5 if total_frames > 60 else (2 if total_frames > 30 else 1)))
 
         try:
             while True:
@@ -605,7 +605,7 @@ class DetectionEngine:
                     if not cap.grab():
                         break
                     # Keep UI progress updating smoothly
-                    if frame_idx % 4 == 0 or frame_idx == total_frames:
+                    if frame_idx % 2 == 0 or frame_idx == total_frames:
                         progress = min(99, max(1, int(frame_idx / total_frames * 100)))
                         summary_text = " • ".join(alert_summaries[:2]) if alert_summaries else ""
                         _update_job(
