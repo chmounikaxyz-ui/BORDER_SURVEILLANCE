@@ -31,10 +31,21 @@ app.use(['/api', '/evidence', '/uploads'], async (req, res) => {
     proxyRes.headers.forEach((value, key) => {
       res.setHeader(key, value);
     });
-    const buffer = await proxyRes.arrayBuffer();
-    res.send(Buffer.from(buffer));
+
+    if (proxyRes.body) {
+      const { Readable } = await import('stream');
+      const nodeStream = Readable.fromWeb(proxyRes.body);
+      nodeStream.on('error', (e) => {
+        if (!res.headersSent) res.status(500).end();
+      });
+      nodeStream.pipe(res);
+    } else {
+      res.end();
+    }
   } catch (err) {
-    res.status(502).json({ error: 'Proxy error connecting to backend', details: err.message });
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Proxy error connecting to backend', details: err.message });
+    }
   }
 });
 

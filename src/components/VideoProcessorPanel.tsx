@@ -123,7 +123,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
 
   // ── Poll job status while running (fast 350ms updates) ──────────────────────
   useEffect(() => {
-    const currentJobId = job?.job_id;
+    const currentJobId = job?.job_id || (job as any)?.id;
     const shouldPoll = Boolean(currentJobId && (job?.status === 'queued' || job?.status === 'running'));
 
     if (pollRef.current) {
@@ -138,9 +138,14 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     let failedPolls = 0;
     const poll = async () => {
       try {
-        const status = await getVideoStatus(currentJobId);
-        if (status) {
+        const rawStatus = await getVideoStatus(currentJobId);
+        if (rawStatus) {
           failedPolls = 0;
+          const unifiedId = rawStatus.job_id || (rawStatus as any).id || currentJobId;
+          const status: VideoJob = {
+            ...rawStatus,
+            job_id: unifiedId,
+          };
           setJob(status);
           if (status.status === 'complete' || status.status === 'error' || status.status === 'cancelled') {
             if (pollRef.current) {
@@ -179,7 +184,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
         pollRef.current = null;
       }
     };
-  }, [job?.job_id, job?.status]);
+  }, [job?.job_id, (job as any)?.id, job?.status]);
 
   // ── Drag-and-drop handlers ────────────────────────────────────────────────
   const handleDrag = useCallback((e: React.DragEvent) => {

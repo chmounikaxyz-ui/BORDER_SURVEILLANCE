@@ -493,6 +493,10 @@ def video_status(job_id: Optional[str] = None):
             from detector import get_job_cached
             cached = get_job_cached(target_id)
             if cached:
+                if "id" in cached and "job_id" not in cached:
+                    cached["job_id"] = cached["id"]
+                if "job_id" in cached and "id" not in cached:
+                    cached["id"] = cached["job_id"]
                 return cached
         except Exception:
             pass
@@ -513,7 +517,12 @@ def video_status(job_id: Optional[str] = None):
     if not row:
         return {"status": "idle", "progress": 0}
 
-    return dict(row)
+    data = dict(row)
+    if "id" in data and "job_id" not in data:
+        data["job_id"] = data["id"]
+    if "job_id" in data and "id" not in data:
+        data["id"] = data["job_id"]
+    return data
 
 
 # ─── Video Live Stream (MJPEG) ───────────────────────────────────────────────

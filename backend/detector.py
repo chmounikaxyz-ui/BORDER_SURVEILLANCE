@@ -206,8 +206,10 @@ def _update_job(job_id: str, **kwargs):
         return
     # 1. Update in-memory cache first for instant microsecond polling response
     with _jobs_cache_lock:
-        current = _jobs_cache.get(job_id, {"id": job_id, "status": "running"})
+        current = _jobs_cache.get(job_id, {"id": job_id, "job_id": job_id, "status": "running"})
         current.update(kwargs)
+        current["id"] = job_id
+        current["job_id"] = job_id
         _jobs_cache[job_id] = current
 
     # 2. Persist to SQLite database safely
@@ -226,7 +228,10 @@ def get_job_cached(job_id: str) -> Optional[dict]:
     """Microsecond-level retrieval of active video analysis status."""
     with _jobs_cache_lock:
         if job_id in _jobs_cache:
-            return dict(_jobs_cache[job_id])
+            d = dict(_jobs_cache[job_id])
+            d["id"] = job_id
+            d["job_id"] = job_id
+            return d
     return None
 
 

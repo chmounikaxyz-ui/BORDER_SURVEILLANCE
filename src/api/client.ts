@@ -386,7 +386,13 @@ export async function processSampleVideo(sampleType: 'highway' | 'intrusion' = '
 
 export async function getVideoStatus(jobId?: string): Promise<VideoJob | null> {
   const query = jobId ? `?job_id=${encodeURIComponent(jobId)}` : '';
-  return apiFetch<VideoJob>(`/video/status${query}`);
+  const data = await apiFetch<any>(`/video/status${query}`);
+  if (data && typeof data === 'object') {
+    const unifiedId = data.job_id || data.id || jobId || '';
+    data.job_id = unifiedId;
+    data.id = unifiedId;
+  }
+  return data as VideoJob | null;
 }
 
 export interface UploadProgress {
