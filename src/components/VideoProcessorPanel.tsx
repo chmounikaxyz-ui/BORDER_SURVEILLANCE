@@ -139,8 +139,9 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
     const poll = async () => {
       try {
         const rawStatus = await getVideoStatus(currentJobId);
-        if (rawStatus) {
+        if (rawStatus && rawStatus.status !== 'idle') {
           failedPolls = 0;
+          setError(null);
           const unifiedId = rawStatus.job_id || (rawStatus as any).id || currentJobId;
           const status: VideoJob = {
             ...rawStatus,
@@ -165,8 +166,14 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
           }
         } else {
           failedPolls += 1;
-          if (failedPolls > 15) {
-            setError('Backend server is waking up or busy. If on Render free tier, it may take up to 45s. For instant detection, run start_all.bat locally.');
+          if (failedPolls > 25) {
+            const isLocal = typeof window !== 'undefined' &&
+              (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+            if (isLocal) {
+              setError('Backend connection taking longer than expected. Please verify the Python backend is running on port 8000.');
+            } else {
+              setError('Backend server is waking up or busy. If on Render free tier, it may take up to 45s. For instant detection, run start_all.bat locally.');
+            }
           }
         }
       } catch (err) {

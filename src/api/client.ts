@@ -63,19 +63,32 @@ const ALT_BASE = 'http://127.0.0.1:8000/api';
 let _ACTIVE_API_BASE: string | null = null;
 
 export function getCandidateApiBases(): string[] {
+  const isLocal = typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+     window.location.hostname === '127.0.0.1' ||
+     window.location.hostname.startsWith('192.168.') ||
+     window.location.hostname.startsWith('10.') ||
+     window.location.hostname.startsWith('172.'));
   const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
   const base = getApiBaseUrl();
   const list: string[] = [];
+
+  // When running locally, ALWAYS prioritize local endpoints and NEVER fall back to Render!
+  if (isLocal) {
+    if (_ACTIVE_API_BASE && (_ACTIVE_API_BASE.includes('localhost') || _ACTIVE_API_BASE.includes('127.0.0.1') || _ACTIVE_API_BASE === '/api')) {
+      list.push(_ACTIVE_API_BASE);
+    }
+    if (!list.includes('/api')) list.push('/api');
+    if (!list.includes('http://127.0.0.1:8000/api')) list.push('http://127.0.0.1:8000/api');
+    if (!list.includes('http://localhost:8000/api')) list.push('http://localhost:8000/api');
+    return list;
+  }
+
   if (_ACTIVE_API_BASE) {
     list.push(_ACTIVE_API_BASE);
   }
   if (!list.includes(base)) list.push(base);
   if (base !== '/api' && !list.includes('/api')) list.push('/api');
-  // Avoid mixed content blocks on HTTPS: modern browsers reject http:// requests from https:// pages
-  if (!isHttps) {
-    if (!list.includes('http://127.0.0.1:8000/api')) list.push('http://127.0.0.1:8000/api');
-    if (!list.includes('http://localhost:8000/api')) list.push('http://localhost:8000/api');
-  }
   const renderProd = 'https://border-surveillance-eol7.onrender.com/api';
   if (!list.includes(renderProd)) list.push(renderProd);
   return list;
@@ -105,6 +118,7 @@ async function apiFetch<T>(
       });
       clearTimeout(timeoutId);
       if (!res.ok) {
+        if (_ACTIVE_API_BASE === b) _ACTIVE_API_BASE = null;
         continue;
       }
       _ACTIVE_API_BASE = b; // Remember the fast working base
@@ -115,6 +129,7 @@ async function apiFetch<T>(
       return text ? (JSON.parse(text) as T) : ({} as T);
     } catch {
       clearTimeout(timeoutId);
+      if (_ACTIVE_API_BASE === b) _ACTIVE_API_BASE = null;
       // try next candidate base
     }
   }
