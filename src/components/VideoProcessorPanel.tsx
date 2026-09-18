@@ -135,10 +135,12 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
       return;
     }
 
+    let failedPolls = 0;
     const poll = async () => {
       try {
         const status = await getVideoStatus(currentJobId);
         if (status) {
+          failedPolls = 0;
           setJob(status);
           if (status.status === 'complete' || status.status === 'error' || status.status === 'cancelled') {
             if (pollRef.current) {
@@ -156,8 +158,14 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
               }));
             }
           }
+        } else {
+          failedPolls += 1;
+          if (failedPolls > 15) {
+            setError('Backend server is waking up or busy. If on Render free tier, it may take up to 45s. For instant detection, run start_all.bat locally.');
+          }
         }
       } catch (err) {
+        failedPolls += 1;
         console.warn('[VideoProcessor] Polling error:', err);
       }
     };
@@ -775,15 +783,34 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
         {job && job.status !== 'idle' && (
           <div className="space-y-2">
             <div className="flex justify-between text-[11px] font-mono">
-              <span className="text-[#c2c6d6]">
-                {isComplete ? 'Analysis Complete' : isError ? 'Error — check backend logs' : `Analysing frame ${(job.current_frame || 0).toLocaleString()} / ${(job.total_frames || 0).toLocaleString()}`}
+              <span className="text-[#c2c6d6] flex items-center gap-1.5">
+                {isComplete ? (
+                  'Analysis Complete'
+                ) : isError ? (
+                  'Error — check backend logs'
+                ) : (job.total_frames || 0) === 0 || job.status === 'queued' ? (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-[#4d8eff] animate-ping inline-block" />
+                    <span>Initializing Neural Pipeline & Loading Weights…</span>
+                  </>
+                ) : (
+                  `Analysing frame ${(job.current_frame || 0).toLocaleString()} / ${(job.total_frames || 0).toLocaleString()}`
+                )}
               </span>
-              <span className="font-bold" style={{ color: progressColor }}>{progressPct}%</span>
+              <span className="font-bold" style={{ color: progressColor }}>
+                {(job.total_frames || 0) === 0 && job.status === 'queued' ? '...' : `${progressPct}%`}
+              </span>
             </div>
             <div className="w-full h-2 bg-[#0b1422] rounded-full overflow-hidden border border-[#424754]/30">
               <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${progressPct}%`, backgroundColor: progressColor, boxShadow: `0 0 8px ${progressColor}80` }}
+                className={`h-full rounded-full transition-all duration-500 ${
+                  (job.total_frames || 0) === 0 && job.status === 'queued' ? 'w-1/3 animate-pulse' : ''
+                }`}
+                style={{
+                  width: (job.total_frames || 0) === 0 && job.status === 'queued' ? '30%' : `${progressPct}%`,
+                  backgroundColor: progressColor,
+                  boxShadow: `0 0 8px ${progressColor}80`,
+                }}
               />
             </div>
 

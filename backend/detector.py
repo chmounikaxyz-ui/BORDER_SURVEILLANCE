@@ -95,11 +95,15 @@ _reid_store = None
 _reid_lock  = threading.Lock()
 
 # ─── Shared frame buffer for live MJPEG streaming ────────────────────────────
-_frame_lock    = threading.Lock()
-_latest_frame  = None          # latest annotated frame (numpy array)
-_stream_active = False         # True while a video is being processed
+_frame_lock         = threading.Lock()
+_latest_frame       = None          # latest annotated frame (numpy array)
+_latest_frame_bytes: Optional[bytes] = None
+_latest_frame_seq: int = 0
+_stream_active      = False         # True while a video is being processed
 _active_job_id: Optional[str] = None
-_job_lock      = threading.Lock()
+_job_lock           = threading.Lock()
+_jobs_cache: Dict[str, dict] = {}
+_jobs_cache_lock    = threading.Lock()
 
 
 def set_active_job(job_id: Optional[str]):
@@ -121,13 +125,33 @@ def stop_all_jobs():
         _stream_active = False
 
 
+def _publish_frame(frame: np.ndarray, is_active: bool = True):
+    """Pre-encode annotated frame to JPEG once in the worker thread for 0-CPU live streaming."""
+    global _latest_frame, _latest_frame_bytes, _latest_frame_seq, _stream_active
+    try:
+        _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 78])
+        raw_bytes = buf.tobytes()
+        with _frame_lock:
+            _latest_frame = frame
+            _latest_frame_bytes = raw_bytes
+            _latest_frame_seq += 1
+            _stream_active = is_active
+    except Exception:
+        with _frame_lock:
+            _latest_frame = frame
+            _stream_active = is_active
+
+
 def get_latest_frame():
-    """Return the latest annotated frame (JPEG bytes) or None."""
+    """Return the latest annotated frame (JPEG bytes) or None with 0ms CPU overhead."""
     with _frame_lock:
-        if _latest_frame is None:
-            return None
-        _, buf = cv2.imencode('.jpg', _latest_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        return buf.tobytes()
+        return _latest_frame_bytes
+
+
+def get_latest_frame_seq() -> tuple:
+    """Return (bytes, seq, is_active) for smart change detection in live stream."""
+    with _frame_lock:
+        return _latest_frame_bytes, _latest_frame_seq, _stream_active
 
 
 def is_stream_active():
@@ -180,12 +204,30 @@ def _get_reid():
 def _update_job(job_id: str, **kwargs):
     if not kwargs:
         return
-    fields = ", ".join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [job_id]
-    conn = get_conn()
-    conn.execute(f"UPDATE video_jobs SET {fields} WHERE id = ?", values)
-    conn.commit()
-    conn.close()
+    # 1. Update in-memory cache first for instant microsecond polling response
+    with _jobs_cache_lock:
+        current = _jobs_cache.get(job_id, {"id": job_id, "status": "running"})
+        current.update(kwargs)
+        _jobs_cache[job_id] = current
+
+    # 2. Persist to SQLite database safely
+    try:
+        fields = ", ".join(f"{k} = ?" for k in kwargs)
+        values = list(kwargs.values()) + [job_id]
+        conn = get_conn()
+        conn.execute(f"UPDATE video_jobs SET {fields} WHERE id = ?", values)
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        pass
+
+
+def get_job_cached(job_id: str) -> Optional[dict]:
+    """Microsecond-level retrieval of active video analysis status."""
+    with _jobs_cache_lock:
+        if job_id in _jobs_cache:
+            return dict(_jobs_cache[job_id])
+    return None
 
 
 def _generate_ai_analysis(class_name, zone, conf, risk, speed, track_id,
@@ -515,9 +557,7 @@ class DetectionEngine:
             init_display = cv2.resize(first_frame, (480, int(fh_i * scale_i))) if scale_i != 1.0 else first_frame.copy()
             cv2.putText(init_display, "BORDERVISION AI | INITIALIZING NEURAL PIPELINE...",
                         (16, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (171, 180, 255), 1, cv2.LINE_AA)
-            with _frame_lock:
-                _latest_frame = init_display
-                _stream_active = True
+            _publish_frame(init_display, is_active=True)
             # Rewind back to beginning
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         else:
@@ -617,8 +657,7 @@ class DetectionEngine:
 
                 if not results or results[0].boxes is None:
                     # Still update the frame buffer with the raw frame
-                    with _frame_lock:
-                        _latest_frame = infer_frame.copy()
+                    _publish_frame(infer_frame, is_active=True)
                     del results
                     del infer_frame
                     continue
@@ -1052,8 +1091,7 @@ class DetectionEngine:
                         )
 
                 # ── Update shared frame buffer for MJPEG streaming ─────────────
-                with _frame_lock:
-                    _latest_frame = annotated.copy()
+                _publish_frame(annotated, is_active=True)
 
                 # Memory safety cleanup per frame
                 del results
@@ -1069,6 +1107,11 @@ class DetectionEngine:
                     alerts_generated=alerts_generated,
                     alert_summary=summary_text,
                 )
+
+                # Cooperative GIL yield to keep FastAPI responsive & control RAM
+                time.sleep(0.005)
+                if frame_idx % 25 == 0:
+                    gc.collect()
 
         finally:
             cap.release()

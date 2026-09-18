@@ -487,8 +487,17 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
 @app.get("/api/video/status")
 def video_status(job_id: Optional[str] = None):
     global _current_job_id
-    conn = get_conn()
     target_id = job_id or _current_job_id
+    if target_id:
+        try:
+            from detector import get_job_cached
+            cached = get_job_cached(target_id)
+            if cached:
+                return cached
+        except Exception:
+            pass
+
+    conn = get_conn()
     if target_id:
         row = conn.execute(
             "SELECT * FROM video_jobs WHERE id = ?", (target_id,)
@@ -513,21 +522,29 @@ def video_status(job_id: Optional[str] = None):
 async def video_live_stream(request: Request):
     """Stream the video being processed with YOLO detection overlays as MJPEG."""
     from fastapi.responses import StreamingResponse
-    from detector import get_latest_frame, is_stream_active
+    from detector import get_latest_frame_seq, is_stream_active
     import numpy as np
 
     async def generate_frames():
+        last_seq = -1
+        idle_ticks = 0
         while True:
             if await request.is_disconnected():
                 break
-            frame_bytes = get_latest_frame()
-            if frame_bytes:
+            frame_bytes, seq, active = get_latest_frame_seq()
+            if frame_bytes and seq != last_seq:
+                last_seq = seq
+                idle_ticks = 0
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                await asyncio.sleep(0.033)  # ~30 fps
+                await asyncio.sleep(0.02)
+            elif frame_bytes and active:
+                # Frame hasn't changed yet; wait briefly for next processed frame
+                await asyncio.sleep(0.03)
             else:
-                if not is_stream_active():
-                    # No active processing — send idle frame
+                idle_ticks += 1
+                if idle_ticks >= 20:
+                    idle_ticks = 0
                     hud = np.zeros((360, 640, 3), dtype=np.uint8)
                     hud[:] = (18, 14, 11)
                     for y in range(60, 360, 60):
@@ -538,13 +555,10 @@ async def video_live_stream(request: Request):
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (173, 198, 255), 1)
                     cv2.putText(hud, "Upload or specify a video to begin analysis", (60, 200),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (194, 198, 214), 1)
-                    _, buf = cv2.imencode('.jpg', hud)
+                    _, buf = cv2.imencode('.jpg', hud, [cv2.IMWRITE_JPEG_QUALITY, 70])
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-                    await asyncio.sleep(1.0)
-                else:
-                    # Processing active but frame not ready yet
-                    await asyncio.sleep(0.05)
+                await asyncio.sleep(0.08)
 
     return StreamingResponse(
         generate_frames(),
