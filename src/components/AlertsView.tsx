@@ -93,6 +93,36 @@ const NIGHT_PERIMETER_TRACK_POINTS: [number, number, number, number, number][] =
   [5.88, 0.603, 0.358, 0.674, 0.727],
 ];
 
+// Ground-truth neural tracking coordinates for normal realistic CCTV video (A_normal_realistic_CCTV_recording_from_a.mp4)
+const NORMAL_REALISTIC_TRACK_POINTS: [number, number, number, number, number][] = [
+  // [timeSec, x1, y1, x2, y2]
+  [0.04, 0.922, 0.261, 1.000, 0.768],
+  [0.25, 0.837, 0.283, 0.964, 0.800],
+  [0.50, 0.723, 0.283, 0.868, 0.856],
+  [0.75, 0.600, 0.305, 0.761, 0.874],
+  [1.00, 0.539, 0.391, 0.698, 0.896],
+  [1.25, 0.473, 0.523, 0.676, 0.912],
+  [1.50, 0.458, 0.561, 0.662, 0.914],
+  [1.75, 0.478, 0.535, 0.664, 0.910],
+  [2.00, 0.491, 0.519, 0.670, 0.911],
+  [2.25, 0.512, 0.532, 0.677, 0.919],
+  [2.50, 0.520, 0.512, 0.681, 0.918],
+  [2.75, 0.523, 0.402, 0.680, 0.920],
+  [3.00, 0.518, 0.281, 0.662, 0.920],
+  [3.25, 0.507, 0.252, 0.646, 0.917],
+  [3.50, 0.537, 0.255, 0.646, 0.916],
+  [3.75, 0.555, 0.254, 0.646, 0.918],
+  [4.00, 0.561, 0.254, 0.650, 0.914],
+  [4.25, 0.562, 0.252, 0.657, 0.915],
+  [4.50, 0.559, 0.249, 0.661, 0.916],
+  [4.75, 0.566, 0.253, 0.668, 0.919],
+  [5.00, 0.541, 0.271, 0.687, 0.932],
+  [5.25, 0.533, 0.287, 0.673, 0.938],
+  [5.50, 0.526, 0.274, 0.640, 0.942],
+  [5.75, 0.490, 0.300, 0.619, 0.983],
+  [5.88, 0.466, 0.286, 0.596, 0.968],
+];
+
 // Ground-truth neural tracking coordinates for highway ANPR vehicle footage (14266560_3840_2160_30fps.mp4 / LC71PZS)
 const HIGHWAY_VEHICLE_TRACK_POINTS: [number, number, number, number, number][] = [
   // [timeSec, x1, y1, x2, y2]
@@ -168,12 +198,16 @@ function interpolateTrack(pts: [number, number, number, number, number][], curTi
   return [pts[0][1], pts[0][2], pts[0][3], pts[0][4]];
 }
 
-function getTrackedBboxAtTime(curTime: number, isPerson: boolean, isVeh: boolean): [number, number, number, number] | null {
-  if (isPerson) {
+function getTrackedBboxAtTime(curTime: number, videoUrl: string, isPerson: boolean, isVeh: boolean): [number, number, number, number] | null {
+  const v = (videoUrl || '').toLowerCase();
+  if (isVeh || v.includes('14266560') || v.includes('highway')) {
+    return interpolateTrack(HIGHWAY_VEHICLE_TRACK_POINTS, curTime);
+  }
+  if (v.includes('cctv_surveillance') || v.includes('0eea47')) {
     return interpolateTrack(NIGHT_PERIMETER_TRACK_POINTS, curTime);
   }
-  if (isVeh) {
-    return interpolateTrack(HIGHWAY_VEHICLE_TRACK_POINTS, curTime);
+  if (v.includes('normal_realistic') || isPerson) {
+    return interpolateTrack(NORMAL_REALISTIC_TRACK_POINTS, curTime);
   }
   return null;
 }
@@ -542,34 +576,38 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
                           activeAlert?.title.includes('LC71') ||
                           activeAlert?.title.toUpperCase().includes('ANPR');
 
-    const isPerimeterClip = !isHighwayClip && (
-      resolvedVideoUrl.includes('cctv_surveillance') ||
-      activeAlert?.id === 'ALRT-0EEA47' ||
-      activeAlert?.cameraCode === 'CAM-ANALYSIS' ||
-      activeAlert?.cameraCode === 'BOP-07' ||
-      activeAlert?.sector?.toLowerCase().includes('perimeter') ||
-      activeAlert?.sector?.toLowerCase().includes('sector east') ||
-      isPersonAlert ||
-      (vid.duration > 0 && vid.duration <= 7.0)
-    );
+    const isCctvSurveillance = resolvedVideoUrl.includes('cctv_surveillance') ||
+                               activeAlert?.id === 'ALRT-0EEA47' ||
+                               activeAlert?.cameraCode === 'CAM-ANALYSIS';
+
+    const isNormalRealistic = resolvedVideoUrl.includes('normal_realistic') ||
+                              activeAlert?.cameraCode === 'BOP-07' ||
+                              isPersonAlert;
 
     if (isHighwayClip) {
       const curTime = vid.duration > 0 && vid.duration <= 13 ? (vid.currentTime % vid.duration) : vid.currentTime;
-      const bbox = getTrackedBboxAtTime(curTime || 0, false, true);
+      const bbox = getTrackedBboxAtTime(curTime || 0, resolvedVideoUrl, false, true);
       if (bbox) {
         setLiveTrackedBbox(bbox);
       }
-    } else if (isPerimeterClip) {
+    } else if (isCctvSurveillance) {
       const duration = vid.duration > 0 ? vid.duration : 5.875;
       const curTime = (vid.currentTime || 0) % duration;
       if (curTime < 0.90) {
         // Target has not entered frame yet (enters from right at ~0.95s)
         setLiveTrackedBbox(null);
       } else {
-        const bbox = getTrackedBboxAtTime(curTime, true, false);
+        const bbox = getTrackedBboxAtTime(curTime, resolvedVideoUrl, true, false);
         if (bbox) {
           setLiveTrackedBbox(bbox);
         }
+      }
+    } else if (isNormalRealistic) {
+      const duration = vid.duration > 0 ? vid.duration : 5.88;
+      const curTime = (vid.currentTime || 0) % duration;
+      const bbox = getTrackedBboxAtTime(curTime, resolvedVideoUrl, true, false);
+      if (bbox) {
+        setLiveTrackedBbox(bbox);
       }
     } else {
       runLiveFrameProbe();
