@@ -89,7 +89,7 @@ export function getCandidateApiBases(): string[] {
   }
   if (!list.includes(base)) list.push(base);
   if (base !== '/api' && !list.includes('/api')) list.push('/api');
-  const renderProd = 'https://border-surveillance-eol7.onrender.com/api';
+  const renderProd = 'https://border-surveillance-fsj7.onrender.com/api';
   if (!list.includes(renderProd)) list.push(renderProd);
   return list;
 }
