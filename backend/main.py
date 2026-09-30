@@ -541,18 +541,14 @@ async def video_live_stream(request: Request):
             if await request.is_disconnected():
                 break
             frame_bytes, seq, active = get_latest_frame_seq()
-            if frame_bytes and seq != last_seq:
+            if frame_bytes:
                 last_seq = seq
-                idle_ticks = 0
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                await asyncio.sleep(0.02)
-            elif frame_bytes and active:
-                # Frame hasn't changed yet; wait briefly for next processed frame
-                await asyncio.sleep(0.03)
+                await asyncio.sleep(0.04 if active else 0.15)
             else:
                 idle_ticks += 1
-                if idle_ticks >= 20:
+                if idle_ticks >= 15:
                     idle_ticks = 0
                     hud = np.zeros((360, 640, 3), dtype=np.uint8)
                     hud[:] = (18, 14, 11)

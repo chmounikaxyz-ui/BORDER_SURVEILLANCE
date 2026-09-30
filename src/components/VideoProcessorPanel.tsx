@@ -183,10 +183,12 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
   const [displayMode, setDisplayMode] = useState<'player' | 'stream'>('player');
   const isDetectingRef = useRef(false);
 
-  // Automatically switch to live stream while background analysis job is actively running (only for preset sample)
+  // Automatically switch to live stream while background analysis job is actively running, and back to video player upon completion
   useEffect(() => {
     if (job?.status === 'running' && !selectedFile) {
       setDisplayMode('stream');
+    } else if (job?.status === 'complete') {
+      setDisplayMode('player');
     }
   }, [job?.status, selectedFile]);
 
@@ -640,7 +642,7 @@ export const VideoProcessorPanel: React.FC<VideoProcessorPanelProps> = ({
         {/* ═══ Video Viewport (Stream or Direct Playback) ═══ */}
         {((job && job.status !== 'idle') || videoPreviewUrl) && (
           <div className="relative w-full h-[520px] rounded-xl overflow-hidden border border-[#424754]/30 bg-black shadow-xl flex items-center justify-center">
-            {displayMode === 'stream' && (isRunning || isComplete) ? (
+            {displayMode === 'stream' && isRunning ? (
               <img
                 key={job?.job_id || 'stream'}
                 src={`${getApiBaseUrl()}/video/stream?job_id=${job?.job_id || ''}&t=${job?.job_id || 'live'}`}
