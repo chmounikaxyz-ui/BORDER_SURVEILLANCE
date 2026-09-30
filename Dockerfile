@@ -30,15 +30,20 @@ COPY . .
 COPY --from=frontend-builder /app/dist ./dist
 COPY --from=frontend-builder /app/dist ./backend/dist
 
-# Expose default Render web service port
-ENV PORT=10000
+# Ensure writable directories for Hugging Face user (UID 1000) and root
+RUN mkdir -p /app/data /app/backend/data /tmp/Ultralytics && \
+    chmod -R 777 /app /tmp
+
+# Expose default port (7860 for Hugging Face Spaces, or dynamic $PORT for Render/Railway)
+ENV PORT=7860
 ENV PYTHON_VERSION=3.11.9
 ENV YOLO_CONFIG_DIR=/tmp/Ultralytics
-EXPOSE 10000
+EXPOSE 7860
 
 # Health check probe
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:${PORT:-10000}/health || exit 1
+  CMD curl -f http://localhost:${PORT:-7860}/health || exit 1
 
 # Launch uvicorn
-CMD ["sh", "-c", "python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh", "-c", "python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
+
