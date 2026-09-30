@@ -104,7 +104,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div className="flex flex-col overflow-hidden">
             <span className="text-[14px] font-semibold text-[#dae3f7] truncate">
-              Operator A. Kumar
+              Operator Mounika
             </span>
             <span className="text-[10px] uppercase font-bold text-[#c2c6d6] opacity-70 tracking-wider truncate">
               Command Centre Analyst
