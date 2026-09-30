@@ -198,15 +198,36 @@ function interpolateTrack(pts: [number, number, number, number, number][], curTi
   return [pts[0][1], pts[0][2], pts[0][3], pts[0][4]];
 }
 
-function getTrackedBboxAtTime(curTime: number, videoUrl: string, isPerson: boolean, isVeh: boolean): [number, number, number, number] | null {
+function getTrackedBboxAtTime(curTime: number, videoUrl: string, isPerson: boolean, isVeh: boolean, alert?: Alert | null): [number, number, number, number] | null {
   const v = (videoUrl || '').toLowerCase();
-  if (isVeh || v.includes('14266560') || v.includes('highway')) {
+  const cam = (alert?.cameraCode || '').toUpperCase();
+  const alertId = (alert?.id || '').toUpperCase();
+  const title = `${alert?.title || ''} ${alert?.description || ''}`.toUpperCase();
+
+  const isHighwayClip =
+    isVeh ||
+    v.includes('14266560') ||
+    v.includes('highway') ||
+    cam.includes('HIGHWAY') ||
+    title.includes('LC71') ||
+    title.includes('ANPR');
+
+  const isPerimeterOrNight =
+    v.includes('cctv_surveillance') ||
+    v.includes('0eea47') ||
+    alertId.includes('0EEA47') ||
+    cam === 'CAM-ANALYSIS' ||
+    title.includes('INTRUSION') ||
+    title.includes('PERIMETER') ||
+    title.includes('SUSPICIOUS BEHAVIOR');
+
+  if (isHighwayClip) {
     return interpolateTrack(HIGHWAY_VEHICLE_TRACK_POINTS, curTime);
   }
-  if (v.includes('cctv_surveillance') || v.includes('0eea47')) {
+  if (isPerimeterOrNight) {
     return interpolateTrack(NIGHT_PERIMETER_TRACK_POINTS, curTime);
   }
-  if (v.includes('normal_realistic') || isPerson) {
+  if (v.includes('normal_realistic') || isPerson || cam === 'BOP-07') {
     return interpolateTrack(NORMAL_REALISTIC_TRACK_POINTS, curTime);
   }
   return null;
@@ -578,15 +599,18 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
 
     const isCctvSurveillance = resolvedVideoUrl.includes('cctv_surveillance') ||
                                activeAlert?.id === 'ALRT-0EEA47' ||
-                               activeAlert?.cameraCode === 'CAM-ANALYSIS';
+                               activeAlert?.cameraCode === 'CAM-ANALYSIS' ||
+                               t.includes('INTRUSION') ||
+                               t.includes('PERIMETER') ||
+                               t.includes('SUSPICIOUS BEHAVIOR');
 
-    const isNormalRealistic = resolvedVideoUrl.includes('normal_realistic') ||
+    const isNormalRealistic = (resolvedVideoUrl.includes('normal_realistic') ||
                               activeAlert?.cameraCode === 'BOP-07' ||
-                              isPersonAlert;
+                              isPersonAlert) && !isCctvSurveillance;
 
     if (isHighwayClip) {
       const curTime = vid.duration > 0 && vid.duration <= 13 ? (vid.currentTime % vid.duration) : vid.currentTime;
-      const bbox = getTrackedBboxAtTime(curTime || 0, resolvedVideoUrl, false, true);
+      const bbox = getTrackedBboxAtTime(curTime || 0, resolvedVideoUrl, false, true, activeAlert);
       if (bbox) {
         setLiveTrackedBbox(bbox);
       }
@@ -597,7 +621,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
         // Target has not entered frame yet (enters from right at ~0.95s)
         setLiveTrackedBbox(null);
       } else {
-        const bbox = getTrackedBboxAtTime(curTime, resolvedVideoUrl, true, false);
+        const bbox = getTrackedBboxAtTime(curTime, resolvedVideoUrl, true, false, activeAlert);
         if (bbox) {
           setLiveTrackedBbox(bbox);
         }
@@ -605,7 +629,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
     } else if (isNormalRealistic) {
       const duration = vid.duration > 0 ? vid.duration : 5.88;
       const curTime = (vid.currentTime || 0) % duration;
-      const bbox = getTrackedBboxAtTime(curTime, resolvedVideoUrl, true, false);
+      const bbox = getTrackedBboxAtTime(curTime, resolvedVideoUrl, true, false, activeAlert);
       if (bbox) {
         setLiveTrackedBbox(bbox);
       }
